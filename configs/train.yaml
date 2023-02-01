@@ -77,25 +77,25 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 1
-    num_workers: 
+    batch_size: 32
+    num_workers: 2
     train:
       target: edit_dataset.EditDataset
       params:
         path: data/clip-filtered-dataset
         split: train
-        min_resize_res: 128
-        max_resize_res: 128
-        crop_res: 128
+        min_resize_res: 256
+        max_resize_res: 256
+        crop_res: 256
         flip_prob: 0.5
     validation:
       target: edit_dataset.EditDataset
       params:
         path: data/clip-filtered-dataset
         split: val
-        min_resize_res: 128
-        max_resize_res: 128
-        crop_res: 128
+        min_resize_res: 256
+        max_resize_res: 256
+        crop_res: 256
 
 lightning:
   callbacks:
@@ -108,7 +108,6 @@ lightning:
 
   trainer:
     max_epochs: 2000
-    benchmark: true
-    # precision: 16
-    accumulate_grad_batches: 1
+    benchmark: True
+    accumulate_grad_batches: 4
     check_val_every_n_epoch: 4
