@@ -9,7 +9,7 @@
         "program": "main.py",
         "args": [
           "--name",
-          "default008",
+          "default00000000",
           "--base",
           "configs/train.yaml",
           "--train",
@@ -21,7 +21,7 @@
         "env": {
           "FOO": "123"
         },
-        "justMyCode": false
+        "justMyCode": true
       },
       "breakpoints": {
         "exception": {
