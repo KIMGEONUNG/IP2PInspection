@@ -1,1 +1,1 @@
-python main.py --name default02 --base configs/train.yaml --train --gpus 0,
+python main.py --name default1003 --base configs/train.yaml --train --gpus 0,
