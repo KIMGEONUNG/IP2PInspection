@@ -81,18 +81,18 @@ data:
     batch_size: 1
     num_workers: 2
     train:
-      target: edit_dataset.EditDataset
+      target: edit_dataset.LowlightDataset
       params:
-        path: data/clip-filtered-dataset
+        path: data/velol
         split: train
         min_resize_res: 256
         max_resize_res: 256
         crop_res: 256
         flip_prob: 0.5
     validation:
-      target: edit_dataset.EditDataset
+      target: edit_dataset.LowlightDataset
       params:
-        path: data/clip-filtered-dataset
+        path: data/velol
         split: val
         min_resize_res: 256
         max_resize_res: 256
