@@ -242,8 +242,8 @@ class DenoiseDataset(Dataset):
         path = join(self.path, path)
         prompt = "denoise"
 
-        image_0 = Image.open(path)
-        image_1 = Image.open(path)
+        image_0 = Image.open(path).convert('RGB')
+        image_1 = Image.open(path).convert('RGB')
 
         # Add noise
         sigma = random.random() / 2
@@ -266,7 +266,6 @@ class DenoiseDataset(Dataset):
         crop = torchvision.transforms.RandomCrop(self.crop_res)
         flip = torchvision.transforms.RandomHorizontalFlip(
             float(self.flip_prob))
-        exit()
         image_0, image_1 = flip(crop(torch.cat((image_0, image_1)))).chunk(2)
 
         return dict(edited=image_1,
