@@ -323,10 +323,8 @@ class DegradationDataset(Dataset):
         path = self.seeds[i]
         path = join(self.path, path)
 
-        prompt = "denoise"
-
         image_1 = Image.open(path).convert('RGB')
-        image_0 = self.degrader.random_single_deg(image_1)
+        image_0, prompt = self.degrader.random_single_deg(image_1)
 
         reize_res = torch.randint(self.min_resize_res, self.max_resize_res + 1,
                                   ()).item()
