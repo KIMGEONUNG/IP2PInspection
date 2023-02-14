@@ -273,6 +273,7 @@ class DenoiseDataset(Dataset):
         return dict(edited=image_1,
                     edit=dict(c_concat=image_0, c_crossattn=prompt))
 
+
 class DegradationDataset(Dataset):
 
     def __init__(
@@ -324,14 +325,14 @@ class DegradationDataset(Dataset):
         path = join(self.path, path)
 
         image_1 = Image.open(path).convert('RGB')
-        image_0, prompt = self.degrader.random_single_deg(image_1)
+        w, h = image_1.size
 
         reize_res = torch.randint(self.min_resize_res, self.max_resize_res + 1,
                                   ()).item()
-        image_0 = image_0.resize((reize_res, reize_res),
+
+        image_1 = image_1.resize((reize_res, int(h / w * reize_res)),
                                  Image.Resampling.LANCZOS)
-        image_1 = image_1.resize((reize_res, reize_res),
-                                 Image.Resampling.LANCZOS)
+        image_0, prompt = self.degrader.random_single_deg(image_1)
 
         image_0 = rearrange(
             2 * torch.tensor(np.array(image_0)).float() / 255 - 1,
