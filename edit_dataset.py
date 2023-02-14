@@ -330,8 +330,12 @@ class DegradationDataset(Dataset):
         reize_res = torch.randint(self.min_resize_res, self.max_resize_res + 1,
                                   ()).item()
 
-        image_1 = image_1.resize((reize_res, int(h / w * reize_res)),
-                                 Image.Resampling.LANCZOS)
+        if w > h:
+            image_1 = image_1.resize((int(w / h * reize_res), reize_res),
+                                     Image.Resampling.LANCZOS)
+        else:
+            image_1 = image_1.resize((reize_res, int(h / w * reize_res)),
+                                     Image.Resampling.LANCZOS)
         image_0, prompt = self.degrader.random_single_deg(image_1)
 
         image_0 = rearrange(
