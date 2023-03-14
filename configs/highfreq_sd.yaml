@@ -83,15 +83,17 @@ data:
   target: main.DataModuleFromConfig
   params:
     batch_size: 8
-    num_workers: 2
+    num_workers: 8
     train:
       target: edit_dataset.HighFrequencyDataset
       params:
         path: DATASET/celeba
         split: train
+        resize_res: 256
         flip_prob: 0.5
     validation:
       target: edit_dataset.HighFrequencyDataset
       params:
         path: DATASET/celeba
         split: val
+        resize_res: 256

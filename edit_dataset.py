@@ -379,10 +379,12 @@ class HighFrequencyDataset(Dataset):
         split: str = "train",
         splits: tuple[float, float, float] = (0.9, 0.05, 0.05),
         flip_prob: float = 0.0,
+        resize_res: int = 256,
     ):
         assert split in ("train", "val", "test")
         assert sum(splits) == 1
         self.path = path
+        self.resize_res = resize_res
         self.flip_prob = flip_prob
 
         with open(Path(self.path, "seeds.json")) as f:
@@ -408,6 +410,11 @@ class HighFrequencyDataset(Dataset):
         image_1 = Image.open(path).convert('RGB')  # GT
         image_0 = Image.open(path.replace('-512', '-LF')).convert(
             'RGB')  # GT w/o high freq.
+
+        image_0 = image_0.resize((self.resize_res, self.resize_res),
+                                 Image.Resampling.LANCZOS)
+        image_1 = image_1.resize((self.resize_res, self.resize_res),
+                                 Image.Resampling.LANCZOS)
 
         prompt = "face, a high quality, detailed and professional image"
 
