@@ -406,7 +406,7 @@ class HighFrequencyDataset(Dataset):
         path = join(self.path, path)
 
         image_1 = Image.open(path).convert('RGB')  # GT
-        image_0 = Image.open(path.replace('512', 'LF')).convert(
+        image_0 = Image.open(path.replace('-512', '-LF')).convert(
             'RGB')  # GT w/o high freq.
 
         prompt = "face, a high quality, detailed and professional image"
