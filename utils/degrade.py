@@ -120,9 +120,9 @@ if __name__ == "__main__":
     from PIL import Image
 
     degrader = Degrade()
-    x = Image.open('sample01.jpg')
+    x = Image.open('sample02.jpg')
 
     for i in tqdm(range(100)):
         y, t = degrader.random_single_deg(x)
         t = t.replace(' ', '_')
-        y.save('tmp_a/%05d_%s.jpg' % (i, t))
+        y.save('tmp_b/%05d_%s.jpg' % (i, t))

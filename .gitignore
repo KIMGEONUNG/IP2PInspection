@@ -5,3 +5,6 @@ imgs
 logs
 *.ckpt
 src
+*.jpg
+*.png
+tmp*
