@@ -91,11 +91,11 @@ data:
         split: train
         resize_res: 512
         flip_prob: 0.5
-        prompt: "face, a high quality, detailed and professional image"
+        prompt: "a high quality, detailed and professional image"
     validation:
       target: edit_dataset.HighFrequencyDataset
       params:
         path: DATASET/celeba
         split: val
         resize_res: 512
-        prompt: "face, a high quality, detailed and professional image"
+        prompt: "a high quality, detailed and professional image"

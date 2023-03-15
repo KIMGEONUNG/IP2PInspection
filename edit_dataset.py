@@ -380,12 +380,14 @@ class HighFrequencyDataset(Dataset):
         splits: tuple[float, float, float] = (0.9, 0.05, 0.05),
         flip_prob: float = 0.0,
         resize_res: int = 256,
+        prompt = "face, a high quality, detailed and professional image"
     ):
         assert split in ("train", "val", "test")
         assert sum(splits) == 1
         self.path = path
         self.resize_res = resize_res
         self.flip_prob = flip_prob
+        self.prompt = prompt
 
         with open(Path(self.path, "seeds.json")) as f:
             self.seeds = json.load(f)
@@ -416,8 +418,6 @@ class HighFrequencyDataset(Dataset):
         image_1 = image_1.resize((self.resize_res, self.resize_res),
                                  Image.Resampling.LANCZOS)
 
-        prompt = "face, a high quality, detailed and professional image"
-
         image_0 = rearrange(
             2 * torch.tensor(np.array(image_0)).float() / 255 - 1,
             "h w c -> c h w")
@@ -430,4 +430,4 @@ class HighFrequencyDataset(Dataset):
         image_0, image_1 = flip(torch.cat((image_0, image_1))).chunk(2)
 
         return dict(edited=image_1,
-                    edit=dict(c_concat=image_0, c_crossattn=prompt))
+                    edit=dict(c_concat=image_0, c_crossattn=self.prompt))
