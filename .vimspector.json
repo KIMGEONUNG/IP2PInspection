@@ -9,9 +9,9 @@
         "program": "main.py",
         "args": [
           "--name",
-          "default008",
+          "HF_test",
           "--base",
-          "configs/train.yaml",
+          "configs/highfreq_sd_128.yaml",
           "--train",
           "--gpus",
           "0,"
@@ -21,7 +21,7 @@
         "env": {
           "FOO": "123"
         },
-        "justMyCode": false
+        "justMyCode": true
       },
       "breakpoints": {
         "exception": {

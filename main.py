@@ -350,7 +350,7 @@ def all_gather(data):
 
 class ImageLogger(Callback):
     def __init__(self, batch_frequency, max_images, clamp=True, increase_log_steps=True,
-                 rescale=True, disabled=False, log_on_batch_idx=False, log_first_step=False,
+                 rescale=True, disabled=False, log_on_batch_idx=False, log_first_step=True,
                  log_images_kwargs=None):
         super().__init__()
         self.rescale = rescale
@@ -383,7 +383,7 @@ class ImageLogger(Callback):
     def log_local(self, save_dir, split, images, prompts,
                   global_step, current_epoch, batch_idx):
         root = os.path.join(save_dir, "images", split)
-        names = {"reals": "before", "inputs": "after", "reconstruction": "before-vq", "samples": "after-gen"}
+        names = {"reals": "cond", "inputs": "gt", "reconstruction": "recon-vq", "samples": "estimated"}
         # print(root)
         for k in images:
             grid = torchvision.utils.make_grid(images[k], nrow=8)

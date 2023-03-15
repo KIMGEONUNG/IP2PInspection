@@ -8,4 +8,4 @@ conda activate ip2p
 
 id=$(date +%Y%m%d-%H%M%S)
 
-python main.py --name HF_$id --base configs/highfreq_sd.yaml --train --gpus 0,
+python main.py --name HF_$id --base configs/highfreq_sd_512.yaml --train --gpus 0,
