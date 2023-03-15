@@ -435,19 +435,29 @@ class HighFrequencyDataset(Dataset):
 
 class HighFrequencyOpenImageDataset(Dataset):
 
-    def __init__(self,
-                 path: str,
-                 split: str = "train",
-                 splits: tuple[float, float, float] = (0.9, 0.05, 0.05),
-                 flip_prob: float = 0.0,
-                 resize_res: int = 512,
-                 prompt="a high quality, detailed and professional image"):
+    def __init__(
+        self,
+        path: str,
+        split: str = "train",
+        splits: tuple[float, float, float] = (0.9, 0.05, 0.05),
+        flip_prob: float = 0.0,
+        resize_res: int = 512,
+        prompt="a high quality, detailed and professional image",
+        filter_d=10,
+        filter_sigmaColor=50,
+        filter_sigmaSpace=50,
+    ):
         assert split in ("train", "val", "test")
         assert sum(splits) == 1
         self.path = path
         self.resize_res = resize_res
         self.flip_prob = flip_prob
         self.prompt = prompt
+
+        self.filter_d = filter_d
+        self.filter_sigmaColor = filter_sigmaColor
+        self.filter_sigmaSpace = filter_sigmaSpace
+
         self.sizing = Compose(
             [Resize(self.resize_res),
              CenterCrop(self.resize_res)])
@@ -471,16 +481,13 @@ class HighFrequencyOpenImageDataset(Dataset):
     def bilateral_filter(
         self,
         x,
-        d=10,
-        sigmaColor=50,
-        sigmaSpace=50,
     ):
         x = np.asarray(x)
         x_hat = cv2.bilateralFilter(
             x,
-            d=d,
-            sigmaColor=sigmaColor,
-            sigmaSpace=sigmaSpace,
+            d=self.filter_d,
+            sigmaColor=self.filter_sigmaColor,
+            sigmaSpace=self.filter_sigmaSpace,
         )
         x_hat = Image.fromarray(x_hat)
         return x_hat

@@ -92,9 +92,9 @@ data:
         resize_res: 512
         flip_prob: 0.5
         prompt: "a high quality, detailed and professional image"
-        filter_d: 10
-        filter_sigmaColor: 50
-        filter_sigmaSpace: 50
+        filter_d: 15
+        filter_sigmaColor: 70
+        filter_sigmaSpace: 70
     validation:
       target: edit_dataset.HighFrequencyOpenImageDataset
       params:
@@ -102,6 +102,6 @@ data:
         split: val
         resize_res: 512
         prompt: "a high quality, detailed and professional image"
-        filter_d: 10
-        filter_sigmaColor: 50
-        filter_sigmaSpace: 50
+        filter_d: 15
+        filter_sigmaColor: 70
+        filter_sigmaSpace: 70
