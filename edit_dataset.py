@@ -5,11 +5,12 @@ import math
 from pathlib import Path
 from typing import Any
 from os.path import join
+import cv2
 
 import numpy as np
 import torch
 import torchvision
-from torchvision.transforms import ToPILImage, ToTensor
+from torchvision.transforms import ToPILImage, ToTensor, Resize, CenterCrop, Compose
 from einops import rearrange
 from PIL import Image
 from torch.utils.data import Dataset
@@ -374,14 +375,13 @@ class DegradationDataset(Dataset):
 class HighFrequencyDataset(Dataset):
 
     def __init__(
-        self,
-        path: str,
-        split: str = "train",
-        splits: tuple[float, float, float] = (0.9, 0.05, 0.05),
-        flip_prob: float = 0.0,
-        resize_res: int = 256,
-        prompt = "face, a high quality, detailed and professional image"
-    ):
+            self,
+            path: str,
+            split: str = "train",
+            splits: tuple[float, float, float] = (0.9, 0.05, 0.05),
+            flip_prob: float = 0.0,
+            resize_res: int = 256,
+            prompt="face, a high quality, detailed and professional image"):
         assert split in ("train", "val", "test")
         assert sum(splits) == 1
         self.path = path
@@ -417,6 +417,82 @@ class HighFrequencyDataset(Dataset):
                                  Image.Resampling.LANCZOS)
         image_1 = image_1.resize((self.resize_res, self.resize_res),
                                  Image.Resampling.LANCZOS)
+
+        image_0 = rearrange(
+            2 * torch.tensor(np.array(image_0)).float() / 255 - 1,
+            "h w c -> c h w")
+        image_1 = rearrange(
+            2 * torch.tensor(np.array(image_1)).float() / 255 - 1,
+            "h w c -> c h w")
+
+        flip = torchvision.transforms.RandomHorizontalFlip(
+            float(self.flip_prob))
+        image_0, image_1 = flip(torch.cat((image_0, image_1))).chunk(2)
+
+        return dict(edited=image_1,
+                    edit=dict(c_concat=image_0, c_crossattn=self.prompt))
+
+
+class HighFrequencyOpenImageDataset(Dataset):
+
+    def __init__(self,
+                 path: str,
+                 split: str = "train",
+                 splits: tuple[float, float, float] = (0.9, 0.05, 0.05),
+                 flip_prob: float = 0.0,
+                 resize_res: int = 512,
+                 prompt="a high quality, detailed and professional image"):
+        assert split in ("train", "val", "test")
+        assert sum(splits) == 1
+        self.path = path
+        self.resize_res = resize_res
+        self.flip_prob = flip_prob
+        self.prompt = prompt
+        self.sizing = Compose(
+            [Resize(self.resize_res),
+             CenterCrop(self.resize_res)])
+
+        with open(Path(self.path, "seeds.json")) as f:
+            self.seeds = json.load(f)
+
+        split_0, split_1 = {
+            "train": (0.0, splits[0]),
+            "val": (splits[0], splits[0] + splits[1]),
+            "test": (splits[0] + splits[1], 1.0),
+        }[split]
+
+        idx_0 = math.floor(split_0 * len(self.seeds))
+        idx_1 = math.floor(split_1 * len(self.seeds))
+        self.seeds = self.seeds[idx_0:idx_1]
+
+    def __len__(self) -> int:
+        return len(self.seeds)
+
+    def bilateral_filter(
+        self,
+        x,
+        d=10,
+        sigmaColor=50,
+        sigmaSpace=50,
+    ):
+        x = np.asarray(x)
+        x_hat = cv2.bilateralFilter(
+            x,
+            d=d,
+            sigmaColor=sigmaColor,
+            sigmaSpace=sigmaSpace,
+        )
+        x_hat = Image.fromarray(x_hat)
+        return x_hat
+
+    def __getitem__(self, i: int) -> dict[str, Any]:
+        path = self.seeds[i]
+        path = join(self.path, path)
+
+        image_1 = Image.open(path).convert('RGB')  # GT
+        image_1 = self.sizing(image_1)
+
+        image_0 = self.bilateral_filter(image_1)
 
         image_0 = rearrange(
             2 * torch.tensor(np.array(image_0)).float() / 255 - 1,
