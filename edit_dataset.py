@@ -514,3 +514,77 @@ class HighFrequencyOpenImageDataset(Dataset):
 
         return dict(edited=image_1,
                     edit=dict(c_concat=image_0, c_crossattn=self.prompt))
+
+
+class DenoiseOpenImageDataset(Dataset):
+
+    def __init__(
+        self,
+        path: str,
+        split: str = "train",
+        splits: tuple[float, float, float] = (0.9, 0.05, 0.05),
+        flip_prob: float = 0.0,
+        resize_res: int = 512,
+        prompt="a high quality, detailed and professional image",
+        sigma=0.4,
+    ):
+        assert split in ("train", "val", "test")
+        assert sum(splits) == 1
+        self.path = path
+        self.resize_res = resize_res
+        self.flip_prob = flip_prob
+        self.prompt = prompt
+
+        self.sigma = sigma
+
+        self.sizing = Compose(
+            [Resize(self.resize_res),
+             CenterCrop(self.resize_res)])
+
+        with open(Path(self.path, "seeds.json")) as f:
+            self.seeds = json.load(f)
+
+        split_0, split_1 = {
+            "train": (0.0, splits[0]),
+            "val": (splits[0], splits[0] + splits[1]),
+            "test": (splits[0] + splits[1], 1.0),
+        }[split]
+
+        idx_0 = math.floor(split_0 * len(self.seeds))
+        idx_1 = math.floor(split_1 * len(self.seeds))
+        self.seeds = self.seeds[idx_0:idx_1]
+
+    def __len__(self) -> int:
+        return len(self.seeds)
+
+    def add_noise(self, im: Image, sigma: float):
+        x = ToTensor()(im)
+        n = torch.randn_like(x)
+        n.normal_(mean=0, std=sigma)
+        x = x + n
+        x = x.clamp(0, 1)
+        x = ToPILImage()(x)
+        return x
+
+    def __getitem__(self, i: int) -> dict[str, Any]:
+        path = self.seeds[i]
+        path = join(self.path, path)
+
+        image_1 = Image.open(path).convert('RGB')  # GT
+        image_1 = self.sizing(image_1)
+
+        image_0 = self.add_noise(image_1, self.sigma)
+
+        image_0 = rearrange(
+            2 * torch.tensor(np.array(image_0)).float() / 255 - 1,
+            "h w c -> c h w")
+        image_1 = rearrange(
+            2 * torch.tensor(np.array(image_1)).float() / 255 - 1,
+            "h w c -> c h w")
+
+        flip = torchvision.transforms.RandomHorizontalFlip(
+            float(self.flip_prob))
+        image_0, image_1 = flip(torch.cat((image_0, image_1))).chunk(2)
+
+        return dict(edited=image_1,
+                    edit=dict(c_concat=image_0, c_crossattn=self.prompt))
