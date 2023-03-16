@@ -14,4 +14,4 @@ if [[ -z $1 ]]; then
     exit 0
 fi
 
-python main.py --name HF_$id --base $1 --train --gpus 0,
+python main.py --name HF_$id --base $1 --train --gpus 0,1
