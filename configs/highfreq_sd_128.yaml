@@ -20,6 +20,7 @@ model:
     use_ema: true
     load_ema: false
     use_sgd: true
+    custom_timesteps_range: [0, 500]
     scheduler_config:
       target: ldm.lr_scheduler.LambdaLinearScheduler
       params:

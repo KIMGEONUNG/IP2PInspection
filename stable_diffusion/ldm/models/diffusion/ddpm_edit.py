@@ -463,6 +463,7 @@ class LatentDiffusion(DDPM):
                  scale_by_std=False,
                  load_ema=True,
                  use_sgd=False,
+                 custom_timesteps_range=None,
                  *args, **kwargs):
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
         self.scale_by_std = scale_by_std
@@ -479,6 +480,7 @@ class LatentDiffusion(DDPM):
         self.cond_stage_trainable = cond_stage_trainable
         self.cond_stage_key = cond_stage_key
         self.use_sgd = use_sgd
+        self.custom_timesteps_range = custom_timesteps_range
         try:
             self.num_downs = len(first_stage_config.params.ddconfig.ch_mult) - 1
         except:
@@ -883,7 +885,14 @@ class LatentDiffusion(DDPM):
         return loss
 
     def forward(self, x, c, *args, **kwargs):
-        t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
+        t_begin = 0
+        t_end = self.num_timesteps
+
+        if self.custom_timesteps_range is not None:
+            t_begin = self.custom_timesteps_range[0] 
+            t_end = self.custom_timesteps_range[1]
+
+        t = torch.randint(t_begin, t_end, (x.shape[0],), device=self.device).long()
         if self.model.conditioning_key is not None:
             assert c is not None
             if self.cond_stage_trainable:
@@ -1240,11 +1249,23 @@ class LatentDiffusion(DDPM):
                 list(map(lambda x: x[:batch_size], cond[key])) for key in cond}
             else:
                 cond = [c[:batch_size] for c in cond] if isinstance(cond, list) else cond[:batch_size]
+
+        # TODO OF MINE
+        # USE SPECIFIC LATENT OF IMG
+        c_concat = cond['c_concat'][0]  ## this is already latent
+        c_concat = self.get_first_stage_encoding(c_concat)
+        t_mine = torch.LongTensor([491] * batch_size).to(c_concat.device)
+        x_T = self.q_sample(c_concat, t_mine)
+        start_T=500
+        ######################################################
+
         return self.p_sample_loop(cond,
                                   shape,
                                   return_intermediates=return_intermediates, x_T=x_T,
                                   verbose=verbose, timesteps=timesteps, quantize_denoised=quantize_denoised,
-                                  mask=mask, x0=x0)
+                                  mask=mask, x0=x0,
+                                  start_T=start_T,
+                                  )
 
     @torch.no_grad()
     def sample_log(self,cond,batch_size,ddim, ddim_steps,**kwargs):
@@ -1263,7 +1284,7 @@ class LatentDiffusion(DDPM):
 
 
     @torch.no_grad()
-    def log_images(self, batch, N=4, n_row=4, sample=True, ddim_steps=200, ddim_eta=1., return_keys=None,
+    def log_images(self, batch, N=4, n_row=4, sample=True, ddim_steps=100, ddim_eta=1., return_keys=None,
                    quantize_denoised=True, inpaint=False, plot_denoise_rows=False, plot_progressive_rows=False,
                    plot_diffusion_rows=False, **kwargs):
 
