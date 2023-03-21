@@ -687,7 +687,7 @@ class LatentDiffusion(DDPM):
     @torch.no_grad()
     def get_input(self, batch, k, return_first_stage_outputs=False, force_c_encode=False,
                   cond_key=None, return_original_cond=False, bs=None, uncond=0.05):
-        x = super().get_input(batch, k)
+        x = super().get_input(batch, k)  # edited
         if bs is not None:
             x = x[:bs]
         x = x.to(self.device)
@@ -878,7 +878,7 @@ class LatentDiffusion(DDPM):
             return self.first_stage_model.encode(x)
 
     def shared_step(self, batch, **kwargs):
-        x, c = self.get_input(batch, self.first_stage_key)
+        x, c = self.get_input(batch, self.first_stage_key)  # x: encoded GT + noise, c: encoded conditions
         loss = self(x, c)
         return loss
 
