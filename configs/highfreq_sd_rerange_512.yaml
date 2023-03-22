@@ -19,7 +19,7 @@ model:
     scale_factor: 0.18215
     use_ema: true
     load_ema: false
-    custom_timestep_range: [700, 1000]
+    custom_timesteps_range: [700, 1000]
     scheduler_config:
       target: ldm.lr_scheduler.LambdaLinearScheduler
       params:
