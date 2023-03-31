@@ -3,9 +3,8 @@
 
 model:
   base_learning_rate: 1.0e-04
-  target: ldm.models.diffusion.ddpm_edit.LatentDiffusion
+  target: ldm.models.diffusion.ddpm_edit.LatentRestoration
   params:
-    # ckpt_path: "checkpoints/openimage_s/last.ckpt"
     linear_start: 0.00085
     linear_end: 0.0120
     num_timesteps_cond: 1
@@ -14,7 +13,6 @@ model:
     first_stage_key: edited
     cond_stage_key: edit
     image_size: 64
-    # image_size: 32
     channels: 4
     cond_stage_trainable: false   # Note: different from the one we trained before
     conditioning_key: hybrid
@@ -50,27 +48,30 @@ model:
         legacy: False
 
     first_stage_config:
-      target: ldm.models.autoencoder.AutoencoderKL
+      target: ldm.models.fuser.FusionKL8
       params:
+        monitor: "val/rec_loss"
+        ckpt_path: "checkpoints/fuser.ckpt"
         embed_dim: 4
-        monitor: val/rec_loss
+        lossconfig:
+          target: ldm.modules.losses.LPIPSWithDiscriminator
+          params:
+            disc_start: 50001
+            kl_weight: 0.000001
+            disc_weight: 0.5
+
         ddconfig:
-          double_z: true
+          double_z: True
           z_channels: 4
           resolution: 256
           in_channels: 3
           out_ch: 3
           ch: 128
-          ch_mult:
-          - 1
-          - 2
-          - 4
-          - 4
+          ch_mult: [ 1,2,4,4 ]  # num_down = len(ch_mult)-1
           num_res_blocks: 2
-          attn_resolutions: []
+          attn_resolutions: [ ]
           dropout: 0.0
-        lossconfig:
-          target: torch.nn.Identity
+
 
     cond_stage_config:
       target: ldm.modules.encoders.modules.FrozenCLIPEmbedder

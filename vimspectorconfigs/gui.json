@@ -1,0 +1,34 @@
+{
+  "configurations": {
+    "run": {
+      "adapter": "debugpy",
+      "configuration": {
+        "request": "launch",
+        "type": "python",
+        "cwd": "${workspaceRoot}",
+        "program": "edit_app.py",
+        "args": [
+          "--ckpt",
+          "checkpoints/openimage_s/last.ckpt",
+          "--config",
+          "configs/generate_highfreq.yaml",
+          "--resolution",
+          "512"
+        ],
+        "stopOnEntry": true,
+        "console": "integratedTerminal",
+        "env": {
+          "FOO": "123"
+        },
+        "justMyCode": true
+      },
+      "breakpoints": {
+        "exception": {
+          "raised": "N",
+          "uncaught": "",
+          "userUnhandled": ""
+        }
+      }
+    }
+  }
+}
