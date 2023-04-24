@@ -75,12 +75,14 @@ class DDIMSampler(object):
                log_every_t=100,
                unconditional_guidance_scale=1.,
                unconditional_conditioning=None,
+               timesteps=None,
+               timesteps_forced=None,
                # this has to come in the same format as the conditioning, # e.g. as encoded tokens, ...
                **kwargs
                ):
         if conditioning is not None:
             if isinstance(conditioning, dict):
-                cbs = conditioning[list(conditioning.keys())[0]].shape[0]
+                cbs = conditioning[list(conditioning.keys())[0]][0].shape[0]
                 if cbs != batch_size:
                     print(f"Warning: Got {cbs} conditionings but batch-size is {batch_size}")
             else:
@@ -107,6 +109,8 @@ class DDIMSampler(object):
                                                     log_every_t=log_every_t,
                                                     unconditional_guidance_scale=unconditional_guidance_scale,
                                                     unconditional_conditioning=unconditional_conditioning,
+                                                    timesteps=timesteps,
+                                                    timesteps_forced=timesteps_forced,
                                                     )
         return samples, intermediates
 
@@ -116,7 +120,9 @@ class DDIMSampler(object):
                       callback=None, timesteps=None, quantize_denoised=False,
                       mask=None, x0=None, img_callback=None, log_every_t=100,
                       temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None,
-                      unconditional_guidance_scale=1., unconditional_conditioning=None,):
+                      unconditional_guidance_scale=1., unconditional_conditioning=None,
+                      timesteps_forced=None,
+                      ):
         device = self.model.betas.device
         b = shape[0]
         if x_T is None:
@@ -124,7 +130,9 @@ class DDIMSampler(object):
         else:
             img = x_T
 
-        if timesteps is None:
+        if timesteps_forced is not None:
+            timesteps = timesteps_forced
+        elif timesteps is None:
             timesteps = self.ddpm_num_timesteps if ddim_use_original_steps else self.ddim_timesteps
         elif timesteps is not None and not ddim_use_original_steps:
             subset_end = int(min(timesteps / self.ddim_timesteps.shape[0], 1) * self.ddim_timesteps.shape[0]) - 1
