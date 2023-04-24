@@ -48,7 +48,7 @@ model:
         legacy: False
 
     first_stage_config:
-      target: ldm.models.fuser.FusionKL8Feat
+      target: ldm.models.fuser.FusionKL8
       params:
         monitor: "val/rec_loss"
         # ckpt_path: "checkpoints/fuserfeat.ckpt" # this overrided by prior code, so use hard-coding
