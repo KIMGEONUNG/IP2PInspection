@@ -559,6 +559,9 @@ class HighFrequencyOpenImagePairDataset(Dataset):
         image_0 = Image.open(path_re).convert('RGB')  # I_re
         image_1 = Image.open(path_gt).convert('RGB')  # I_gt
 
+        image_0 = self.sizing(image_0)
+        image_1 = self.sizing(image_1)
+
         image_0 = rearrange(
             2 * torch.tensor(np.array(image_0)).float() / 255 - 1,
             "h w c -> c h w")

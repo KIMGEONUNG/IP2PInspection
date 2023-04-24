@@ -350,7 +350,7 @@ def all_gather(data):
 
 class ImageLogger(Callback):
     def __init__(self, batch_frequency, max_images, clamp=True, increase_log_steps=True,
-                 rescale=True, disabled=False, log_on_batch_idx=False, log_first_step=False,
+                 rescale=True, disabled=False, log_on_batch_idx=False, log_first_step=True,
                  log_images_kwargs=None):
         super().__init__()
         self.rescale = rescale
