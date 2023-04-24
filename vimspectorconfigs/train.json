@@ -11,7 +11,7 @@
           "--name",
           "HF_test",
           "--base",
-          "configs/highfreq_sd_128.yaml",
+          "configs/highfreq_sd_openimg_I_re_128.yaml",
           "--train",
           "--gpus",
           "0,"
