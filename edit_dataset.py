@@ -515,6 +515,61 @@ class HighFrequencyOpenImageDataset(Dataset):
         return dict(edited=image_1,
                     edit=dict(c_concat=image_0, c_crossattn=self.prompt))
 
+class HighFrequencyOpenImagePairDataset(Dataset):
+
+    def __init__(
+        self,
+        path: str,
+        split: str = "train",
+        splits: tuple[float, float, float] = (0.95, 0.05, 0.00),
+        resize_res: int = 512,
+        prompt="a high quality, detailed and professional image",
+    ):
+        assert split in ("train", "val", "test")
+        assert sum(splits) == 1
+        self.path = path
+        self.resize_res = resize_res
+        self.prompt = prompt
+
+        self.sizing = Compose(
+            [Resize(self.resize_res),
+             CenterCrop(self.resize_res)])
+
+        with open(Path(self.path, "seeds_pair.json")) as f:
+            self.seeds = json.load(f)
+
+        split_0, split_1 = {
+            "train": (0.0, splits[0]),
+            "val": (splits[0], splits[0] + splits[1]),
+            "test": (splits[0] + splits[1], 1.0),
+        }[split]
+
+        idx_0 = math.floor(split_0 * len(self.seeds))
+        idx_1 = math.floor(split_1 * len(self.seeds))
+        self.seeds = self.seeds[idx_0:idx_1]
+
+    def __len__(self) -> int:
+        return len(self.seeds)
+
+    def __getitem__(self, i: int) -> dict[str, Any]:
+        name = self.seeds[i]
+        path_gt = join(self.path, "train200T512x512", name)
+        path_re = join(self.path, "train200T512x512_de", name)
+
+        image_0 = Image.open(path_re).convert('RGB')  # I_re
+        image_1 = Image.open(path_gt).convert('RGB')  # I_gt
+
+        image_0 = rearrange(
+            2 * torch.tensor(np.array(image_0)).float() / 255 - 1,
+            "h w c -> c h w")
+        image_1 = rearrange(
+            2 * torch.tensor(np.array(image_1)).float() / 255 - 1,
+            "h w c -> c h w")
+
+        return dict(edited=image_1,
+                    edit=dict(c_concat=image_0, c_crossattn=self.prompt))
+
+
 
 class DenoiseOpenImageDataset(Dataset):
 
@@ -588,3 +643,8 @@ class DenoiseOpenImageDataset(Dataset):
 
         return dict(edited=image_1,
                     edit=dict(c_concat=image_0, c_crossattn=self.prompt))
+
+
+if __name__ == "__main__":
+    data = DenoiseOpenImageDataset('DATASET/openimage')
+    a = data[16]
