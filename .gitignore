@@ -8,3 +8,5 @@ src
 *.jpg
 *.png
 tmp*
+outputs
+DATASET
