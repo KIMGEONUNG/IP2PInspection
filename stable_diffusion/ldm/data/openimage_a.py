@@ -53,9 +53,6 @@ class OpenImagePairDataset(Dataset):
         img_in, img_gt = self.sizing(merge).chunk(2)
         img_in, img_gt = ToPILImage()(img_in), ToPILImage()(img_gt)
 
-        img_in = np.array(img_in).astype(np.float32) / 255 * 2 - 1
-        img_gt = np.array(img_gt).astype(np.float32) / 255 * 2 - 1
-
         img_in = rearrange(
             2 * torch.tensor(np.array(img_in)).float() / 255 - 1,
             "h w c -> c h w")
