@@ -7,6 +7,7 @@ source $condapath
 conda activate ip2p
 
 id=$(date +%Y%m%d-%H%M%S)
+id_gpu=${2:-0,1}
 
 if [[ -z $1 ]]; then
     echo -e "\033[31mError: no config arg \033[0m" >&2
@@ -14,4 +15,4 @@ if [[ -z $1 ]]; then
     exit 0
 fi
 
-python main.py --name HF_$id --base $1 --train --gpus 0,1
+python main.py --name $id --base $1 --train --gpus $id_gpu
