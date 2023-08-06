@@ -1,6 +1,6 @@
 model:
   base_learning_rate: 0.0001
-  target: ldm.models.diffusion.ddpm_edit.LatentDiffusion
+  target: exps.T001-A00.LatentDiffusion
   params:
     ckpt_path: stable_diffusion/models/ldm/stable-diffusion-v1/v1-5-pruned-emaonly.ckpt
     # ckpt_path: checkpoints/instruct-pix2pix-00-22000.ckpt
@@ -33,7 +33,7 @@ model:
         f_min:
         - 1.0
     unet_config:
-      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
+      target: exps.T001-A00.UNetModel
       params:
         image_size: 32
         in_channels: 8
@@ -82,8 +82,8 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 8
-    num_workers: 8
+    batch_size: 1
+    num_workers: 1
     train:
       target: edit_dataset.HighFrequencyDataset
       params:
@@ -91,11 +91,11 @@ data:
         split: train
         resize_res: 512
         flip_prob: 0.5
-        prompt: "a high quality, detailed and professional image"
+        prompt: "face, a high quality, detailed and professional image"
     validation:
       target: edit_dataset.HighFrequencyDataset
       params:
         path: DATASET/celeba
         split: val
         resize_res: 512
-        prompt: "a high quality, detailed and professional image"
+        prompt: "face, a high quality, detailed and professional image"

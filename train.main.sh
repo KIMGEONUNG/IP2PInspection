@@ -7,7 +7,6 @@ source $condapath
 conda activate ip2p
 
 id=$(date +%Y%m%d-%H%M%S)
-id_gpu=${2:-0,1}
 
 if [[ -z $1 ]]; then
     echo -e "\033[31mError: no config arg \033[0m" >&2
