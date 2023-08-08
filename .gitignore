@@ -10,3 +10,12 @@ src
 tmp*
 outputs
 DATASET
+
+# added
+docs/
+logs_ldm/
+memo.md
+stable_diffusion/ldm/models/autounet_a.py
+stable_diffusion/ldm/models/fuser.py
+stable_diffusion/ldm/models/shortcut.py
+taming/

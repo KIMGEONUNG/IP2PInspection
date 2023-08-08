@@ -82,20 +82,21 @@ def profile_transformer(model):
 
 
 if __name__ == "__main__":
-    path_config = "configs/generate.yaml"
+    path_config = "configs/legacy/generate.yaml"
     path_ckpt = "checkpoints/instruct-pix2pix-00-22000.ckpt"
     # path_config = "configs/lowlight.yaml"
     # path_ckpt = "checkpoints/low-light.ckpt"
     config = OmegaConf.load(path_config)
 
-    model: LatentDiffusion = load_model_from_config(config, path_ckpt,
-                                                    None).cuda()
+    model: LatentDiffusion = load_model_from_config(config, path_ckpt, None)
 
-    ae = model.first_stage_model
+    num_unet = num_param(model.model)
+    num_ae = num_param(model.first_stage_model)
+    num_te = num_param(model.cond_stage_model)
 
-    print('num original:', num_param(model.first_stage_model))
-    # riginal: 83653863
-
-
-
+    print('UNet :', num_unet)
+    print('Autoencoder :', num_ae)
+    print('TextEncoder :', num_te)
+    print('---------------------------')
+    print('Total :', num_unet + num_ae + num_te)
     print('finishied')

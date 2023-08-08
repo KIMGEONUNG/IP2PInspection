@@ -31,8 +31,6 @@ from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_t
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.util import instantiate_from_config
-from ldm.modules.diffusionmodules.util import checkpoint
-
 from ldm.modules.diffusionmodules.util import (
     checkpoint,
     conv_nd,
@@ -219,9 +217,11 @@ class BasicTransformerBlock(nn.Module):
         self.checkpoint = checkpoint
 
     def forward(self, x, context=None):
-        return checkpoint(self._forward, (x, context), self.parameters(), self.checkpoint)
+        # return checkpoint(self._forward, (x, context), self.parameters(), self.checkpoint)
+        return checkpoint(self._forward, (x,), self.parameters(), self.checkpoint)
 
-    def _forward(self, x, context=None):
+    # def _forward(self, x, context=None):
+    def _forward(self, x):
         x = self.attn1(self.norm1(x)) + x
         # x = self.attn2(self.norm2(x), context=context) + x
         x = self.ff(self.norm3(x)) + x
@@ -1031,7 +1031,7 @@ class LatentDiffusion(DDPM):
         else:
             self.register_buffer('scale_factor', torch.tensor(scale_factor))
         self.instantiate_first_stage(first_stage_config)
-        self.instantiate_cond_stage(cond_stage_config)
+        # self.instantiate_cond_stage(cond_stage_config)
         self.cond_stage_forward = cond_stage_forward
         self.clip_denoised = False
         self.bbox_tokenizer = None
@@ -1083,27 +1083,27 @@ class LatentDiffusion(DDPM):
         for param in self.first_stage_model.parameters():
             param.requires_grad = False
 
-    def instantiate_cond_stage(self, config):
-        if not self.cond_stage_trainable:
-            if config == "__is_first_stage__":
-                print("Using first stage also as cond stage.")
-                self.cond_stage_model = self.first_stage_model
-            elif config == "__is_unconditional__":
-                print(f"Training {self.__class__.__name__} as an unconditional model.")
-                self.cond_stage_model = None
-                # self.be_unconditional = True
-            else:
-                model = instantiate_from_config(config)
-                self.cond_stage_model = model.eval()
-                self.cond_stage_model.train = disabled_train
-                for param in self.cond_stage_model.parameters():
-                    param.requires_grad = False
-        else:
-            assert config != '__is_first_stage__'
-            assert config != '__is_unconditional__'
-            model = instantiate_from_config(config)
-            self.cond_stage_model = model
-
+    # def instantiate_cond_stage(self, config):
+    #     if not self.cond_stage_trainable:
+    #         if config == "__is_first_stage__":
+    #             print("Using first stage also as cond stage.")
+    #             self.cond_stage_model = self.first_stage_model
+    #         elif config == "__is_unconditional__":
+    #             print(f"Training {self.__class__.__name__} as an unconditional model.")
+    #             self.cond_stage_model = None
+    #             # self.be_unconditional = True
+    #         else:
+    #             model = instantiate_from_config(config)
+    #             self.cond_stage_model = model.eval()
+    #             self.cond_stage_model.train = disabled_train
+    #             for param in self.cond_stage_model.parameters():
+    #                 param.requires_grad = False
+    #     else:
+    #         assert config != '__is_first_stage__'
+    #         assert config != '__is_unconditional__'
+    #         model = instantiate_from_config(config)
+    #         self.cond_stage_model = model
+    #
     def _get_denoise_row_from_list(self, samples, desc='', force_no_decoder_quantization=False):
         denoise_row = []
         for zd in tqdm(samples, desc=desc):
@@ -1126,17 +1126,18 @@ class LatentDiffusion(DDPM):
         return self.scale_factor * z
 
     def get_learned_conditioning(self, c):
-        if self.cond_stage_forward is None:
-            if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
-                c = self.cond_stage_model.encode(c)
-                if isinstance(c, DiagonalGaussianDistribution):
-                    c = c.mode()
-            else:
-                c = self.cond_stage_model(c)
-        else:
-            assert hasattr(self.cond_stage_model, self.cond_stage_forward)
-            c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
-        return c
+        return None
+        # if self.cond_stage_forward is None:
+        #     if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
+        #         c = self.cond_stage_model.encode(c)
+        #         if isinstance(c, DiagonalGaussianDistribution):
+        #             c = c.mode()
+        #     else:
+        #         c = self.cond_stage_model(c)
+        # else:
+        #     assert hasattr(self.cond_stage_model, self.cond_stage_forward)
+        #     c = getattr(self.cond_stage_model, self.cond_stage_forward)(c)
+        # return c
 
     def meshgrid(self, h, w):
         y = torch.arange(0, h).view(h, 1, 1).repeat(1, w, 1)
@@ -1248,8 +1249,9 @@ class LatentDiffusion(DDPM):
         prompt_mask = rearrange(random < 2 * uncond, "n -> n 1 1")
         input_mask = 1 - rearrange((random >= uncond).float() * (random < 3 * uncond).float(), "n -> n 1 1 1")
 
-        null_prompt = self.get_learned_conditioning([""])
-        cond["c_crossattn"] = [torch.where(prompt_mask, null_prompt, self.get_learned_conditioning(xc["c_crossattn"]).detach())]
+        # null_prompt = self.get_learned_conditioning([""])
+        # cond["c_crossattn"] = [torch.where(prompt_mask, null_prompt, self.get_learned_conditioning(xc["c_crossattn"]).detach())]
+        cond["c_crossattn"] = [None]
         cond["c_concat"] = [input_mask * self.encode_first_stage((xc["c_concat"].to(self.device))).mode().detach()]
 
         out = [z, cond]
@@ -1934,9 +1936,7 @@ class LatentDiffusion(DDPM):
             print('Diffusion model optimizing logvar')
             params.append(self.logvar)
 
-
         opt = torch.optim.AdamW(params, lr=lr)
-        # opt = torch.optim.SGD(params, lr=lr)
         # if self.use_sgd:
         #     opt = torch.optim.SGD(params, lr=lr)
         # else:
@@ -1984,8 +1984,7 @@ class DiffusionWrapper(pl.LightningModule):
             out = self.diffusion_model(x, t, context=cc)
         elif self.conditioning_key == 'hybrid':
             xc = torch.cat([x] + c_concat, dim=1)
-            cc = torch.cat(c_crossattn, 1)
-            out = self.diffusion_model(xc, t, context=cc)
+            out = self.diffusion_model(xc, t)
         elif self.conditioning_key == 'adm':
             cc = c_crossattn[0]
             out = self.diffusion_model(x, t, y=cc)
