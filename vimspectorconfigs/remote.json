@@ -1,0 +1,27 @@
+{
+  "configurations": {
+    "remote-python": {
+      "adapter": "multi-session",
+      "filetypes": [
+        "python"
+      ],
+      "configuration": {
+        "name": "Attach",
+        "type": "python",
+        "request": "attach",
+        "stopOnEntry": true,
+        "connect": {
+                "host": "localhost",
+                "port": 5678
+            },
+        "pathMappings": [
+          {
+            "localRoot": "${workspaceFolder}",
+            "remoteRoot": "."
+          }
+        ]
+      }
+    }
+  }
+}
+

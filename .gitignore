@@ -12,6 +12,7 @@ outputs
 DATASET
 
 # added
+.vimspector.json
 docs/
 logs_ldm/
 memo.md
