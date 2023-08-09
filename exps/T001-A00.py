@@ -1784,6 +1784,10 @@ class LatentDiffusion(DDPM):
     def sample(self, cond, batch_size=16, return_intermediates=False, x_T=None,
                verbose=True, timesteps=None, quantize_denoised=False,
                mask=None, x0=None, shape=None, start_T=None, **kwargs):
+
+        if "c_crossattn" in cond.keys():
+            del cond["c_crossattn"]
+
         if shape is None:
             shape = (batch_size, self.channels, self.image_size, self.image_size)
         if cond is not None:
