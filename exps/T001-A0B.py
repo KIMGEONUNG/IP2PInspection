@@ -1,4 +1,6 @@
 import argparse, os, sys, datetime, glob
+from PIL import Image
+import json
 from pytz import timezone
 from abc import abstractmethod
 import torch.nn as nn
@@ -16,12 +18,14 @@ from os.path import join
 from pathlib import Path
 import torch
 import torch as th
+import torchvision
 
 from packaging import version
 from omegaconf import OmegaConf
 
 from pytorch_lightning.trainer import Trainer
 from pytorch_lightning.plugins import DDPPlugin
+from pytorch_lightning.callbacks import Callback
 
 sys.path.append("./stable_diffusion")
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
@@ -57,6 +61,146 @@ from ldm.modules.diffusionmodules.openaimodel import (
 
 sys.path.append("./utils")
 import etc 
+from etc import all_gather
+
+class ImageLogger(Callback):
+
+    def __init__(self,
+                 batch_frequency,
+                 max_images,
+                 clamp=True,
+                 increase_log_steps=True,
+                 rescale=True,
+                 disabled=False,
+                 log_on_batch_idx=False,
+                 log_first_step=True,
+                 log_images_kwargs=None):
+        super().__init__()
+        self.rescale = rescale
+        self.batch_freq = batch_frequency
+        self.max_images = max_images
+        self.logger_log_images = {
+            pl.loggers.TestTubeLogger: self._testtube,
+        }
+        self.log_steps = [
+            2**n for n in range(6,
+                                int(np.log2(self.batch_freq)) + 1)
+        ]
+        if not increase_log_steps:
+            self.log_steps = [self.batch_freq]
+        self.clamp = clamp
+        self.disabled = disabled
+        self.log_on_batch_idx = log_on_batch_idx
+        self.log_images_kwargs = log_images_kwargs if log_images_kwargs else {}
+        self.log_first_step = log_first_step
+
+    @rank_zero_only
+    def _testtube(self, pl_module, images, batch_idx, split):
+        for k in images:
+            grid = torchvision.utils.make_grid(images[k])
+            grid = (grid + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
+
+            tag = f"{split}/{k}"
+            pl_module.logger.experiment.add_image(
+                tag, grid, global_step=pl_module.global_step)
+
+    @rank_zero_only
+    def log_local(self, save_dir, split, images, prompts, global_step,
+                  current_epoch, batch_idx):
+        root = os.path.join(save_dir, "images", split)
+        names = {
+            "reals": "cond",
+            "inputs": "gt",
+            "reconstruction": "recon-vq",
+            "samples": "estimated"
+        }
+        # print(root)
+        for k in images:
+            grid = torchvision.utils.make_grid(images[k], nrow=8)
+            if self.rescale:
+                grid = (grid + 1.0) / 2.0  # -1,1 -> 0,1; c,h,w
+            grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
+            grid = grid.numpy()
+            grid = (grid * 255).astype(np.uint8)
+            filename = "gs-{:06}_e-{:06}_b-{:06}_{}.png".format(
+                global_step, current_epoch, batch_idx, names[k])
+            path = os.path.join(root, filename)
+            os.makedirs(os.path.split(path)[0], exist_ok=True)
+            # print(path)
+            Image.fromarray(grid).save(path)
+
+        filename = "gs-{:06}_e-{:06}_b-{:06}_prompt.json".format(
+            global_step, current_epoch, batch_idx)
+        path = os.path.join(root, filename)
+        with open(path, "w") as f:
+            for p in prompts:
+                f.write(f"{json.dumps(p)}\n")
+
+    def log_img(self, pl_module, batch, batch_idx, split="train"):
+        check_idx = batch_idx if self.log_on_batch_idx else pl_module.global_step
+        if (self.check_frequency(check_idx)
+                and  # batch_idx % self.batch_freq == 0
+                hasattr(pl_module, "log_images") and
+                callable(pl_module.log_images) and
+                self.max_images > 0) or (split == "val" and batch_idx == 0):
+            logger = type(pl_module.logger)
+
+            is_train = pl_module.training
+            if is_train:
+                pl_module.eval()
+
+            with torch.no_grad():
+                images = pl_module.log_images(batch,
+                                              split=split,
+                                              **self.log_images_kwargs)
+
+            prompts = batch["edit"]["c_crossattn"][:self.max_images]
+            prompts = [p for ps in all_gather(prompts) for p in ps]
+
+            for k in images:
+                N = min(images[k].shape[0], self.max_images)
+                images[k] = images[k][:N]
+                images[k] = torch.cat(all_gather(images[k][:N]))
+                if isinstance(images[k], torch.Tensor):
+                    images[k] = images[k].detach().cpu()
+                    if self.clamp:
+                        images[k] = torch.clamp(images[k], -1., 1.)
+
+            self.log_local(pl_module.logger.save_dir, split, images, prompts,
+                           pl_module.global_step, pl_module.current_epoch,
+                           batch_idx)
+
+            logger_log_images = self.logger_log_images.get(
+                logger, lambda *args, **kwargs: None)
+            logger_log_images(pl_module, images, pl_module.global_step, split)
+
+            if is_train:
+                pl_module.train()
+
+    def check_frequency(self, check_idx):
+        if ((check_idx % self.batch_freq) == 0 or
+            (check_idx in self.log_steps)) and (check_idx > 0
+                                                or self.log_first_step):
+            if len(self.log_steps) > 0:
+                self.log_steps.pop(0)
+            return True
+        return False
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx,
+                           dataloader_idx):
+        if not self.disabled and (pl_module.global_step > 0
+                                  or self.log_first_step):
+            self.log_img(pl_module, batch, batch_idx, split="train")
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch,
+                                batch_idx, dataloader_idx):
+        if not self.disabled and pl_module.global_step > 0:
+            self.log_img(pl_module, batch, batch_idx, split="val")
+        if hasattr(pl_module, 'calibrate_grad_norm'):
+            if (pl_module.calibrate_grad_norm
+                    and batch_idx % 25 == 0) and batch_idx > 0:
+                self.log_gradients(trainer, pl_module, batch_idx=batch_idx)
+
 
 __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
@@ -268,8 +412,8 @@ class SpatialTransformer(nn.Module):
         x = self.norm(x)
         x = self.proj_in(x)
         x = rearrange(x, 'b c h w -> b (h w) c')
-        for block in self.transformer_blocks:
-            x = block(x, context=context)
+        # for block in self.transformer_blocks:
+        #     x = block(x, context=context)
         x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)
         x = self.proj_out(x)
         return x + x_in
@@ -1247,13 +1391,13 @@ class LatentDiffusion(DDPM):
 
         # To support classifier-free guidance, randomly drop out only text conditioning 5%, only image conditioning 5%, and both 5%.
         random = torch.rand(x.size(0), device=x.device)
-        prompt_mask = rearrange(random < 2 * uncond, "n -> n 1 1")
-        input_mask = 1 - rearrange((random >= uncond).float() * (random < 3 * uncond).float(), "n -> n 1 1 1")
 
         # null_prompt = self.get_learned_conditioning([""])
         # cond["c_crossattn"] = [torch.where(prompt_mask, null_prompt, self.get_learned_conditioning(xc["c_crossattn"]).detach())]
         cond["c_crossattn"] = [None]
-        cond["c_concat"] = [input_mask * self.encode_first_stage((xc["c_concat"].to(self.device))).mode().detach()]
+
+        latent = self.encode_first_stage((xc["c_concat"].to(self.device))).mode().detach()
+        cond["c_concat"] = [latent * self.scale_factor]
 
         out = [z, cond]
         if return_first_stage_outputs:
@@ -2233,7 +2377,7 @@ if __name__ == "__main__":
                 }
             },
             "image_logger": {
-                "target": "etc.ImageLogger",
+                "target": "exps.T001-A0A.ImageLogger",
                 "params": {
                     "batch_frequency": 750,
                     "max_images": 4,

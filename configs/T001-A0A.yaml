@@ -1,6 +1,6 @@
 model:
   base_learning_rate: 0.0001
-  target: exps.T001-A00.LatentDiffusion
+  target: exps.T001-A0A.LatentDiffusion
   params:
     ckpt_path: stable_diffusion/models/ldm/stable-diffusion-v1/v1-5-pruned-emaonly.ckpt
     # ckpt_path: checkpoints/instruct-pix2pix-00-22000.ckpt
@@ -33,7 +33,7 @@ model:
         f_min:
         - 1.0
     unet_config:
-      target: exps.T001-A00.UNetModel
+      target: exps.T001-A0A.UNetModel
       params:
         image_size: 32
         in_channels: 8
