@@ -6,6 +6,7 @@
                   "request": "launch",                                                    
                   "type": "python",                                                       
                   "cwd": "${workspaceRoot}",                                              
+                  "python": "${CONDA_PREFIX}/bin/python",
                   "program": "${file}",
                   "args":[],
                   "stopOnEntry": true,                                                   
