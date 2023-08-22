@@ -598,9 +598,9 @@ class UNetModel(nn.Module):
                                    repeat_only=False)
         emb = self.time_embed(t_emb)
 
-        if timesteps[0] < 500:
-            del_encode_idxs = [9, 10, 11]
-            del_decode_idxs = [0, 1, 2]
+        if timesteps[0] < 300:
+            del_encode_idxs = [8, 9, 10, 11]
+            del_decode_idxs = [0, 1, 2, 3]
         else:
             del_encode_idxs = []
             del_decode_idxs = []
@@ -618,8 +618,6 @@ class UNetModel(nn.Module):
 
         if len(del_encode_idxs) == 0:
             h = self.middle_block(h, emb, context)
-        else: 
-            h = torch.zeros_like(h)
 
         for i, module in enumerate(self.output_blocks):
             if i in del_decode_idxs:

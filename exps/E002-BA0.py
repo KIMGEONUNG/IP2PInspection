@@ -1,4 +1,5 @@
 import argparse, os, sys, datetime, glob
+import pickle
 from pytorch_lightning import seed_everything
 from torchvision.transforms import ToPILImage
 from PIL import Image
@@ -66,6 +67,8 @@ __conditioning_keys__ = {
     'crossattn': 'c_crossattn',
     'adm': 'y'
 }
+
+_SAVE_ = {}
 
 
 class TimestepBlock(nn.Module):
@@ -598,34 +601,28 @@ class UNetModel(nn.Module):
                                    repeat_only=False)
         emb = self.time_embed(t_emb)
 
-        if timesteps[0] < 500:
-            del_encode_idxs = [9, 10, 11]
-            del_decode_idxs = [0, 1, 2]
-        else:
-            del_encode_idxs = []
-            del_decode_idxs = []
-
         if self.num_classes is not None:
             assert y.shape == (x.shape[0], )
             emb = emb + self.label_emb(y)
 
         h = x.type(self.dtype)
         for i, module in enumerate(self.input_blocks):
-            if i in del_encode_idxs:
-                continue
             h = module(h, emb, context)
             hs.append(h)
+        h = self.middle_block(h, emb, context)
 
-        if len(del_encode_idxs) == 0:
-            h = self.middle_block(h, emb, context)
-        else: 
-            h = torch.zeros_like(h)
+        # global _SAVE_
+        with torch.enable_grad():
+            for item in hs:
+                item.requires_grad = True
+            for i, module in enumerate(self.output_blocks):
+                h = th.cat([h, hs[-(i + 1)]], dim=1)
+                h = module(h, emb, context)
 
-        for i, module in enumerate(self.output_blocks):
-            if i in del_decode_idxs:
-                continue
-            h = th.cat([h, hs.pop()], dim=1)
-            h = module(h, emb, context)
+            loss = h.mean()
+            loss.backward()
+            _SAVE_[timesteps[0].clone().item()] = [item.grad.clone().cpu().abs().mean().item() for item in hs]
+
         h = h.type(x.dtype)
         if self.predict_codebook_ids:
             return self.id_predictor(h)
@@ -2215,6 +2212,9 @@ class LatentDiffusion(DDPM):
                                                  start_T=start_T,
                                                  return_intermediates=True,
                                                  **kwargs)
+        with open(kwargs['dir_log'], 'wb') as f:
+            pickle.dump(_SAVE_, f)
+        _SAVE_.clear()
 
         return samples, intermediates
 
@@ -2260,7 +2260,7 @@ class DiffusionWrapper(pl.LightningModule):
         return out
 
 
-if __name__ == "__main__":
+def main():
     now = datetime.datetime.now(
         timezone('Asia/Seoul')).strftime("%Y-%m-%d-%H-%M-%S")
     sys.path.append(os.getcwd())
@@ -2306,9 +2306,10 @@ if __name__ == "__main__":
     ]
     uc = model.get_learned_conditioning([""])
     cfg = 7.5
-    num_step = 100
+    num_step = 500
     use_ddim = True
     for i, (seed, prompt) in enumerate(pairs):
+        a = prompt[0].replace(" ", "_")
         seed_everything(seed)
         c = model.get_learned_conditioning(prompt)
         x, _ = model.sample_log(
@@ -2318,9 +2319,13 @@ if __name__ == "__main__":
             num_step,
             unconditional_guidance_scale=7.5,
             unconditional_conditioning=uc,
+            dir_log=join(logdir, f"s_{i:03d}-t_{a}.pkl"),
         )
+
         x = model.decode_first_stage(x)
         x = x.add(1).mul(0.5).clamp(0, 1)[0]
         img = ToPILImage()(x)
-        a = prompt[0].replace(" ", "_")
         img.save(join(logdir, f"s_{i:03d}-t_{a}.png"))
+
+if __name__ == "__main__":
+    main()
