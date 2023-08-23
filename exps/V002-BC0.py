@@ -2302,7 +2302,7 @@ if __name__ == "__main__":
     data.setup()
 
     dataset = data.datasets['validation']
-    batch_size = 4
+    batch_size = 12
     dataloader = DataLoader(dataset, batch_size=batch_size)
     use_ddim = False
     num_step = 25
