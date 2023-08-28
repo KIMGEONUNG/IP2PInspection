@@ -640,7 +640,7 @@ class UNetModel(nn.Module):
                 self._feature_size += ch
 
         # Remove
-        self._reform()
+        # self.reform()
 
         self.out = nn.Sequential(
             normalization(ch),
@@ -713,7 +713,7 @@ class UNetModel(nn.Module):
         else:
             return self.out(h)
 
-    def _reform(self):
+    def reform(self):
         del_encode_idxs = [6, 7, 8, 9, 10, 11]
         del_decode_idxs = [0, 1, 2, 3, 4, 5]
         for i in reversed(sorted(del_encode_idxs)):
@@ -912,6 +912,7 @@ class DDPM(pl.LightningModule):
                     del sd[k]
         missing, unexpected = self.load_state_dict(sd, strict=False) if not only_model else self.model.load_state_dict(
             sd, strict=False)
+        self.model.reform()
         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
         if len(missing) > 0:
             print(f"Missing Keys: {missing}")
