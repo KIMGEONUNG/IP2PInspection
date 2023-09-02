@@ -2312,8 +2312,8 @@ if __name__ == "__main__":
             cond = value['edit']
             cond['c_concat'] = [model.encode_first_stage(cond['c_concat'].cuda()).mode() * model.scale_factor]
 
-            for num_step in [500, 250, 100, 50, 25, 10, 5]:
-                for k in range(4): # DDIM deterministic 
+            for k in range(4): # DDIM deterministic 
+                for num_step in [500, 250, 200, 100, 50, 25, 10, 5]:
                     x, _ = model.sample_log(
                         cond,
                         batch_size,
@@ -2326,5 +2326,3 @@ if __name__ == "__main__":
                     for j, item in enumerate(range(len(x))):
                         img_out = ToPILImage()(x[j])
                         img_out.save(join(logdir, f"{i*batch_size+j:04d}_DDIM{num_step:03d}_{k}.png"))
-
-            exit()

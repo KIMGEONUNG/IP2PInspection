@@ -582,33 +582,7 @@ class UNetModel(nn.Module):
         if legacy:
             #num_heads = 1
             dim_head = ch // num_heads if use_spatial_transformer else num_head_channels
-        # self.middle_block = TimestepEmbedSequential(
-        #     ResBlock(
-        #         ch,
-        #         time_embed_dim,
-        #         dropout,
-        #         dims=dims,
-        #         use_checkpoint=use_checkpoint,
-        #         use_scale_shift_norm=use_scale_shift_norm,
-        #     ),
-        #     AttentionBlock(
-        #         ch,
-        #         use_checkpoint=use_checkpoint,
-        #         num_heads=num_heads,
-        #         num_head_channels=dim_head,
-        #         use_new_attention_order=use_new_attention_order,
-        #     ) if not use_spatial_transformer else SpatialTransformer(
-        #                     ch, num_heads, dim_head, depth=transformer_depth, context_dim=context_dim
-        #                 ),
-        #     ResBlock(
-        #         ch,
-        #         time_embed_dim,
-        #         dropout,
-        #         dims=dims,
-        #         use_checkpoint=use_checkpoint,
-        #         use_scale_shift_norm=use_scale_shift_norm,
-        #     ),
-        # )
+
         self._feature_size += ch
 
         self.output_blocks = nn.ModuleList([])
@@ -667,6 +641,7 @@ class UNetModel(nn.Module):
                 self.output_blocks.append(TimestepEmbedSequential(*layers))
                 self._feature_size += ch
 
+
         self.out = nn.Sequential(
             normalization(ch),
             nn.SiLU(),
@@ -716,20 +691,20 @@ class UNetModel(nn.Module):
             assert y.shape == (x.shape[0],)
             emb = emb + self.label_emb(y)
 
-        del_encode_idxs = [6, 7, 8, 9, 10, 11]
-        del_decode_idxs = [0, 1, 2, 3, 4, 5]
+        # del_encode_idxs = [6, 7, 8, 9, 10, 11]
+        # del_decode_idxs = [0, 1, 2, 3, 4, 5]
 
         h = x.type(self.dtype)
         for i, module in enumerate(self.input_blocks):
-            if i in del_encode_idxs:
-                continue
+            # if i in del_encode_idxs:
+            #     continue
             h = module(h, emb, context)
             hs.append(h)
         # h = self.middle_block(h, emb, context)
         h = self.middle_block(h)
         for i, module in enumerate(self.output_blocks):
-            if i in del_decode_idxs:
-                continue
+            # if i in del_decode_idxs:
+            #     continue
             h = th.cat([h, hs.pop()], dim=1)
             h = module(h, emb, context)
         h = h.type(x.dtype)
@@ -739,13 +714,12 @@ class UNetModel(nn.Module):
             return self.out(h)
 
     def reform(self):
-        pass
-        # del_encode_idxs = []
-        # del_decode_idxs = []
-        # for i in reversed(sorted(del_encode_idxs)):
-        #     del self.input_blocks[i]
-        # for i in reversed(sorted(del_decode_idxs)):
-        #     del self.output_blocks[i]
+        del_encode_idxs = [6, 7, 8, 9, 10, 11]
+        del_decode_idxs = [0, 1, 2, 3, 4, 5]
+        for i in reversed(sorted(del_encode_idxs)):
+            del self.input_blocks[i]
+        for i in reversed(sorted(del_decode_idxs)):
+            del self.output_blocks[i]
 
 
 
@@ -906,36 +880,13 @@ class DDPM(pl.LightningModule):
                     print(f"{context}: Restored training weights")
 
     def init_from_ckpt(self, path, ignore_keys=list(), only_model=False):
+        self.model.diffusion_model.reform()
         sd = torch.load(path, map_location="cpu")
+
         if "state_dict" in list(sd.keys()):
             sd = sd["state_dict"]
-        keys = list(sd.keys())
-
-        # Our model adds additional channels to the first layer to condition on an input image.
-        # For the first layer, copy existing channel weights and initialize new channel weights to zero.
-        input_keys = [
-            "model.diffusion_model.input_blocks.0.0.weight",
-            "model_ema.diffusion_modelinput_blocks00weight",
-        ]
 
         self_sd = self.state_dict()
-        for input_key in input_keys:
-            if input_key not in sd or input_key not in self_sd:
-                continue
-
-            input_weight = self_sd[input_key]
-
-            if input_weight.size() != sd[input_key].size():
-                print(f"Manual init: {input_key}")
-                input_weight.zero_()
-                input_weight[:, :4, :, :].copy_(sd[input_key])
-                ignore_keys.append(input_key)
-
-        for k in keys:
-            for ik in ignore_keys:
-                if k.startswith(ik):
-                    print("Deleting key {} from state_dict.".format(k))
-                    del sd[k]
         missing, unexpected = self.load_state_dict(sd, strict=False) if not only_model else self.model.load_state_dict(
             sd, strict=False)
         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
@@ -2213,7 +2164,7 @@ def get_parser(**parser_kwargs):
         "--train",
         type=str2bool,
         const=True,
-        default=False,
+        default=True,
         nargs="?",
         help="train",
     )
@@ -2275,7 +2226,8 @@ def nondefault_trainer_args(opt):
 
 
 if __name__ == "__main__":
-    now = datetime.datetime.now(timezone('Asia/Seoul')).strftime("%Y-%m-%d-%H-%M-%S")
+    # now = datetime.datetime.now(timezone('Asia/Seoul')).strftime("%Y-%m-%d-%H-%M-%S")
+    now = 'fix'
     sys.path.append(os.getcwd())
     cfn = Path(os.path.basename(__file__)).stem
     path_config = join("configs/", f"{cfn}.yaml")
@@ -2305,22 +2257,70 @@ if __name__ == "__main__":
     dataset = data.datasets['validation']
     batch_size = 4
     dataloader = DataLoader(dataset, batch_size=batch_size)
+
+    # schedules
+    def make_ddim_sigmas(alphacums, ddim_timesteps, eta):
+        alphas = alphacums[ddim_timesteps]
+        alphas_prev = np.asarray([alphacums[0]] + alphacums[ddim_timesteps[:-1]].tolist())
+        sigmas = eta * np.sqrt((1 - alphas_prev) / (1 - alphas) * (1 - alphas / alphas_prev))
+        return sigmas
+
+    def make_ddim_timesteps(num_ddim_timesteps):
+        c = 1000 // num_ddim_timesteps
+        ddim_timesteps = np.asarray(list(range(0, 1000, c)))
+        steps_out = ddim_timesteps + 1
+        return steps_out
+
+    timesteps_ddpm = list(reversed(range(0, 1000)))
+    timesteps = list(reversed(make_ddim_timesteps(50)))
+
+    alphas = model.alphas_cumprod
+    sqrt_alphas = model.sqrt_alphas_cumprod
+    sqrt_betas = model.sqrt_one_minus_alphas_cumprod
+    eta = 0.0
+    sigmas = make_ddim_sigmas(alphas.cpu(), list(reversed(timesteps_ddpm)), eta=eta).flip(0)
+    unet = model.model
+
+
     use_ddim = True
-    with torch.no_grad(), model.ema_scope():
+    num_step = 25
+    x_t = torch.randn(batch_size, 4, 64, 64).cuda()
+
+    with torch.no_grad():
         for i, value in enumerate(tqdm(dataloader)):
             input = value['edit']['c_concat'].add(1).mul(0.5)
             cond = value['edit']
             cond['c_concat'] = [model.encode_first_stage(cond['c_concat'].cuda()).mode() * model.scale_factor]
 
-            for num_step in [500, 250, 200, 100, 50, 25, 10, 5]:
-                x, _ = model.sample_log(
-                    cond,
-                    batch_size,
-                    use_ddim,
-                    num_step,
-                )
-                x = model.decode_first_stage(x)
-                x = x.add(1).mul(0.5).clamp(0, 1)
-                for j, item in enumerate(range(len(x))):
-                    img_out = ToPILImage()(x[j])
-                    img_out.save(join(logdir, f"{i*batch_size+j:04d}_DDIM{num_step:03d}.png"))
+            # x, _ = model.sample_log(
+            #     cond,
+            #     batch_size,
+            #     use_ddim,
+            #     num_step,
+            # )
+            # exit()
+
+            cnt = len(timesteps)
+            for idx in tqdm(range(cnt)):
+                t = timesteps[idx]
+                ts = torch.full((batch_size,), t, dtype=torch.long).cuda()
+                e_t = unet(x_t, ts, cond['c_concat'])
+                x_0 = 1 / sqrt_alphas[t] * (x_t - sqrt_betas[t] * e_t)
+                if idx == cnt - 1:
+                    break
+                tm1 = timesteps[idx + 1]
+                # x_t = sqrt_alphas[tm1] * x_0 + sqrt_betas[tm1] * e_t
+                x_t = sqrt_alphas[tm1] * x_0 + torch.sqrt(1 - alphas[tm1] - sigmas[t] ** 2) * e_t + sigmas[t] * torch.randn_like(x_t)
+
+            x = model.decode_first_stage(x_0)
+            x = x.add(1).mul(0.5).clamp(0, 1)
+
+            for j, item in enumerate(range(len(x))):
+                img_in = ToPILImage()(input[j])
+                img_in.save(join(logdir, f"{i*batch_size+j:04d}_input.png"))
+                img_out = ToPILImage()(x[j])
+                img_out.save(join(logdir, f"{i*batch_size+j:04d}_output.png"))
+            pass
+            exit()
+
+        exit()
