@@ -502,6 +502,9 @@ class UNetModel(nn.Module):
                 )
             ]
         )
+        self.middle_block = TimestepEmbedSequential(conv_nd(dims, 640, 1280, 3, padding=1))
+        self.middle_block = conv_nd(dims, 640, 1280, 3, padding=1)
+        # self.middle_block = nn.Conv2d(640, 1280, 3, 1, 1)
 
         self._feature_size = model_channels
         input_block_chans = [model_channels]
@@ -578,33 +581,6 @@ class UNetModel(nn.Module):
             #num_heads = 1
             dim_head = ch // num_heads if use_spatial_transformer else num_head_channels
 
-        self.middle_block = TimestepEmbedSequential(
-            ResBlock(
-                ch,
-                time_embed_dim,
-                dropout,
-                dims=dims,
-                use_checkpoint=use_checkpoint,
-                use_scale_shift_norm=use_scale_shift_norm,
-            ),
-            AttentionBlock(
-                ch,
-                use_checkpoint=use_checkpoint,
-                num_heads=num_heads,
-                num_head_channels=dim_head,
-                use_new_attention_order=use_new_attention_order,
-            ) if not use_spatial_transformer else SpatialTransformer(
-                            ch, num_heads, dim_head, depth=transformer_depth, context_dim=context_dim
-                        ),
-            ResBlock(
-                ch,
-                time_embed_dim,
-                dropout,
-                dims=dims,
-                use_checkpoint=use_checkpoint,
-                use_scale_shift_norm=use_scale_shift_norm,
-            ),
-        )
         self._feature_size += ch
 
         self.output_blocks = nn.ModuleList([])
@@ -724,8 +700,8 @@ class UNetModel(nn.Module):
             #     continue
             h = module(h, emb, context)
             hs.append(h)
-        h = self.middle_block(h, emb, context)
-        # h = self.middle_block(h)
+        # h = self.middle_block(h, emb, context)
+        h = self.middle_block(h)
         for i, module in enumerate(self.output_blocks):
             # if i in del_decode_idxs:
             #     continue
@@ -936,7 +912,7 @@ class DDPM(pl.LightningModule):
                     del sd[k]
         missing, unexpected = self.load_state_dict(sd, strict=False) if not only_model else self.model.load_state_dict(
             sd, strict=False)
-        # self.model.diffusion_model.reform()
+        self.model.diffusion_model.reform()
         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
         if len(missing) > 0:
             print(f"Missing Keys: {missing}")
@@ -1411,7 +1387,6 @@ class LatentDiffusion(DDPM):
         if bs is not None:
             xc["c_crossattn"] = xc["c_crossattn"][:bs]
             xc["c_concat"] = xc["c_concat"][:bs]
-            xc["mask"] = xc["mask"][:bs]
         cond = {}
 
         # To support classifier-free guidance, randomly drop out only text conditioning 5%, only image conditioning 5%, and both 5%.
@@ -1422,9 +1397,7 @@ class LatentDiffusion(DDPM):
         cond["c_crossattn"] = [None]
 
         latent = self.encode_first_stage((xc["c_concat"].to(self.device))).mode().detach()
-        # cond["c_concat"] = [latent * self.scale_factor]
-        cond["c_concat"] = [torch.cat([latent * self.scale_factor, xc["mask"]], dim=-3)]
-
+        cond["c_concat"] = [latent * self.scale_factor]
 
         out = [z, cond]
         if return_first_stage_outputs:
