@@ -442,6 +442,7 @@ class NoiseDataset(Dataset):
                  split: str = "train",
                  splits: tuple[float, float, float] = (0.9, 0.05, 0.05),
                  resize_res: int = 512,
+                 flip_prob: float = 0.5,
                  sigma: float = 0.5, 
                  prompt=""):
         assert split in ("train", "val", "test")
@@ -450,6 +451,7 @@ class NoiseDataset(Dataset):
         self.resize_res = resize_res
         self.prompt = prompt
         self.sigma = sigma
+        self.flip_prob = flip_prob
 
         with open(Path(self.path, "seeds.json")) as f:
             self.seeds = json.load(f)
