@@ -2258,21 +2258,6 @@ if __name__ == "__main__":
     batch_size = 4
     dataloader = DataLoader(dataset, batch_size=batch_size)
 
-    # schedules
-    def make_ddim_sigmas(alphacums, ddim_timesteps, eta):
-        alphas = alphacums[ddim_timesteps]
-        alphas_prev = np.asarray([alphacums[0]] + alphacums[ddim_timesteps[:-1]].tolist())
-        sigmas = eta * np.sqrt((1 - alphas_prev) / (1 - alphas) * (1 - alphas / alphas_prev))
-        return sigmas
-
-    def make_ddim_timesteps(num_ddim_timesteps):
-        c = 1000 // num_ddim_timesteps
-        ddim_timesteps = np.asarray(list(range(0, 1000, c)))
-
-        steps_out = ddim_timesteps + 1
-        # steps_out = ddim_timesteps
-        return steps_out
-
     def gen_timestep(stage=1):
         assert 1 <= stage <= 9
 
@@ -2290,7 +2275,7 @@ if __name__ == "__main__":
 
     num_timestep = 50
     eta = 1.0
-    timesteps, _ = gen_timestep(6)
+    timesteps, _ = gen_timestep(2)
 
     alphas = model.alphas_cumprod
     sqrt_alphas = model.sqrt_alphas_cumprod
@@ -2319,19 +2304,18 @@ if __name__ == "__main__":
                 ts = torch.full((batch_size,), t, dtype=torch.long).cuda()
                 e_t = unet(x_t, ts, cond['c_concat'])
                 x_0 = 1 / sqrt_alphas[t] * (x_t - sqrt_betas[t] * e_t)
+
+                x = model.decode_first_stage(x_0)
+                x = x.add(1).mul(0.5).clamp(0, 1)
+
+                for j, item in enumerate(range(len(x))):
+                    img_out = ToPILImage()(x[j])
+                    img_out.save(join(logdir, f"{i*batch_size+j:04d}_{t:03d}_output.png"))
+
                 if idx == cnt - 1:
                     break
                 tm1 = timesteps[idx + 1]
                 sigma = eta * np.sqrt((1 - alphas[tm1].item()) / (1 - alphas[t].item()) * (1 - alphas[t].item() / alphas[tm1].item()))
                 x_t = sqrt_alphas[tm1] * x_0 + torch.sqrt(1 - alphas[tm1] - sigma ** 2) * e_t + sigma * torch.randn_like(x_t)
-
-            x = model.decode_first_stage(x_0)
-            x = x.add(1).mul(0.5).clamp(0, 1)
-
-            for j, item in enumerate(range(len(x))):
-                img_in = ToPILImage()(input[j])
-                img_in.save(join(logdir, f"{i*batch_size+j:04d}_input.png"))
-                img_out = ToPILImage()(x[j])
-                img_out.save(join(logdir, f"{i*batch_size+j:04d}_output.png"))
             pass
             exit()

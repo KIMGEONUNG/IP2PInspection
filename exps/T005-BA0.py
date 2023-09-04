@@ -1,6 +1,4 @@
 import argparse, os, sys, datetime, glob
-from torchvision.transforms import ToPILImage
-from torch.utils.data import DataLoader
 from PIL import Image
 import json
 from pytz import timezone
@@ -641,6 +639,8 @@ class UNetModel(nn.Module):
                 self.output_blocks.append(TimestepEmbedSequential(*layers))
                 self._feature_size += ch
 
+        # Remove
+        # self.reform()
 
         self.out = nn.Sequential(
             normalization(ch),
@@ -880,15 +880,39 @@ class DDPM(pl.LightningModule):
                     print(f"{context}: Restored training weights")
 
     def init_from_ckpt(self, path, ignore_keys=list(), only_model=False):
-        self.model.diffusion_model.reform()
         sd = torch.load(path, map_location="cpu")
-
         if "state_dict" in list(sd.keys()):
             sd = sd["state_dict"]
+        keys = list(sd.keys())
+
+        # Our model adds additional channels to the first layer to condition on an input image.
+        # For the first layer, copy existing channel weights and initialize new channel weights to zero.
+        input_keys = [
+            "model.diffusion_model.input_blocks.0.0.weight",
+            "model_ema.diffusion_modelinput_blocks00weight",
+        ]
 
         self_sd = self.state_dict()
+        for input_key in input_keys:
+            if input_key not in sd or input_key not in self_sd:
+                continue
+
+            input_weight = self_sd[input_key]
+
+            if input_weight.size() != sd[input_key].size():
+                print(f"Manual init: {input_key}")
+                input_weight.zero_()
+                input_weight[:, :4, :, :].copy_(sd[input_key])
+                ignore_keys.append(input_key)
+
+        for k in keys:
+            for ik in ignore_keys:
+                if k.startswith(ik):
+                    print("Deleting key {} from state_dict.".format(k))
+                    del sd[k]
         missing, unexpected = self.load_state_dict(sd, strict=False) if not only_model else self.model.load_state_dict(
             sd, strict=False)
+        # self.model.diffusion_model.reform()
         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
         if len(missing) > 0:
             print(f"Missing Keys: {missing}")
@@ -1363,6 +1387,7 @@ class LatentDiffusion(DDPM):
         if bs is not None:
             xc["c_crossattn"] = xc["c_crossattn"][:bs]
             xc["c_concat"] = xc["c_concat"][:bs]
+            xc["mask"] = xc["mask"][:bs]
         cond = {}
 
         # To support classifier-free guidance, randomly drop out only text conditioning 5%, only image conditioning 5%, and both 5%.
@@ -1373,7 +1398,9 @@ class LatentDiffusion(DDPM):
         cond["c_crossattn"] = [None]
 
         latent = self.encode_first_stage((xc["c_concat"].to(self.device))).mode().detach()
-        cond["c_concat"] = [latent * self.scale_factor]
+        # cond["c_concat"] = [latent * self.scale_factor]
+        cond["c_concat"] = [torch.cat([latent * self.scale_factor, xc["mask"]], dim=-3)]
+
 
         out = [z, cond]
         if return_first_stage_outputs:
@@ -2226,112 +2253,274 @@ def nondefault_trainer_args(opt):
 
 
 if __name__ == "__main__":
-    # now = datetime.datetime.now(timezone('Asia/Seoul')).strftime("%Y-%m-%d-%H-%M-%S")
-    now = 'fix'
-    sys.path.append(os.getcwd())
-    cfn = Path(os.path.basename(__file__)).stem
-    path_config = join("configs/", f"{cfn}.yaml")
+    now = datetime.datetime.now(timezone('Asia/Seoul')).strftime("%Y-%m-%d-%H-%M-%S")
 
-    # load configuration
-    config = OmegaConf.load(path_config)
-    config.model.target = config.model.target.format(cfn)
-    config.model.params.unet_config.target= config.model.params.unet_config.target.format(cfn)
+    # add cwd for convenience and to make classes in this file available when
+    # running as `python main.py`
+    # (in particular `main.DataModuleFromConfig`)
+    sys.path.append(os.getcwd())
+
+    parser = get_parser()
+    parser = Trainer.add_argparse_args(parser)
+
+    opt, unknown = parser.parse_known_args()
+    cfn = Path(os.path.basename(__file__)).stem
+    opt.base = [join("configs/", f"{cfn}.yaml")]
 
     # assert opt.name
-    cfg_fname = os.path.split(path_config)[-1]
+    cfg_fname = os.path.split(opt.base[0])[-1]
     cfg_name = os.path.splitext(cfg_fname)[0]
     nowname = f"{cfg_name}_{now}"
-    logdir = os.path.join("logs", nowname)
+    logdir = os.path.join(opt.logdir, nowname)
+    ckpt = os.path.join(logdir, "checkpoints", "last.ckpt")
+    resume = False
+
+    if os.path.isfile(ckpt):
+        opt.resume_from_checkpoint = ckpt
+        base_configs = sorted(glob.glob(os.path.join(logdir,
+                                                     "configs/*.yaml")))
+        opt.base = base_configs + opt.base
+        _tmp = logdir.split("/")
+        nowname = _tmp[-1]
+        resume = True
+
+    ckptdir = os.path.join(logdir, "checkpoints")
+    cfgdir = os.path.join(logdir, "configs")
+
     os.makedirs(logdir, exist_ok=True)
+    os.makedirs(ckptdir, exist_ok=True)
+    os.makedirs(cfgdir, exist_ok=True)
 
-    # model
-    model = instantiate_from_config(config.model)
-    model.cuda()
-    model.eval()
+    try:
+        # init and save configs
+        configs = [OmegaConf.load(cfg) for cfg in opt.base]
+        cli = OmegaConf.from_dotlist(unknown)
+        config = OmegaConf.merge(*configs, cli)
 
-    # data
-    data = instantiate_from_config(config.data)
-    data.prepare_data()
-    data.setup()
+        config.model.target = config.model.target.format(cfn)
+        config.model.params.unet_config.target= config.model.params.unet_config.target.format(cfn)
 
-    dataset = data.datasets['validation']
-    batch_size = 4
-    dataloader = DataLoader(dataset, batch_size=batch_size)
+        if resume:
+            # By default, when finetuning from Stable Diffusion, we load the EMA-only checkpoint to initialize all weights.
+            # If resuming InstructPix2Pix from a finetuning checkpoint, instead load both EMA and non-EMA weights.
+            config.model.params.load_ema = True
 
-    # schedules
-    def make_ddim_sigmas(alphacums, ddim_timesteps, eta):
-        alphas = alphacums[ddim_timesteps]
-        alphas_prev = np.asarray([alphacums[0]] + alphacums[ddim_timesteps[:-1]].tolist())
-        sigmas = eta * np.sqrt((1 - alphas_prev) / (1 - alphas) * (1 - alphas / alphas_prev))
-        return sigmas
+        lightning_config = config.pop("lightning", OmegaConf.create())
+        # merge trainer cli with config
+        trainer_config = lightning_config.get("trainer", OmegaConf.create())
+        # default to ddp
+        trainer_config["accelerator"] = "ddp"
+        for k in nondefault_trainer_args(opt):
+            trainer_config[k] = getattr(opt, k)
+        if not "gpus" in trainer_config:
+            del trainer_config["accelerator"]
+            cpu = True
+        else:
+            gpuinfo = trainer_config["gpus"]
+            print(f"Running on GPUs {gpuinfo}")
+            cpu = False
+        trainer_opt = argparse.Namespace(**trainer_config)
+        lightning_config.trainer = trainer_config
 
-    def make_ddim_timesteps(num_ddim_timesteps):
-        c = 1000 // num_ddim_timesteps
-        ddim_timesteps = np.asarray(list(range(0, 1000, c)))
+        # model
+        model = instantiate_from_config(config.model)
+        # model.model.diffusion_model.reform()
 
-        steps_out = ddim_timesteps + 1
-        # steps_out = ddim_timesteps
-        return steps_out
+        # trainer and callbacks
+        trainer_kwargs = dict()
 
-    def gen_timestep(stage=1):
-        assert 1 <= stage <= 9
+        # default logger configs
+        default_logger_cfgs = {
+            "testtube": {
+                "target": "pytorch_lightning.loggers.TestTubeLogger",
+                "params": {
+                    "name": "testtube",
+                    "save_dir": logdir,
+                }
+            },
+        }
+        default_logger_cfg = default_logger_cfgs["testtube"]
+        if "logger" in lightning_config:
+            logger_cfg = lightning_config.logger
+        else:
+            logger_cfg = OmegaConf.create()
+        logger_cfg = OmegaConf.merge(default_logger_cfg, logger_cfg)
+        trainer_kwargs["logger"] = instantiate_from_config(logger_cfg)
 
-        # Start from 2^N timesteps
-        seq = list(reversed(range(1, 1000)))
-        seq = seq[::2] + seq[1:][::2][:13]
+        # modelcheckpoint - use TrainResult/EvalResult(checkpoint_on=metric) to
+        # specify which metric is used to determine best models
+        default_modelckpt_cfg = {
+            "target": "pytorch_lightning.callbacks.ModelCheckpoint",
+            "params": {
+                "dirpath": ckptdir,
+                "filename": "{epoch:06}",
+                "verbose": True,
+                "save_last": False,
+            }
+        }
 
-        teacher = list(sorted(seq, reverse=True))
-        for i in range(stage - 1):
-            teacher = teacher[::2]
-        student = list(teacher)[::2]
-        student = student[:-1]  # The last index should not be selected
-        return teacher, student
+        if "modelcheckpoint" in lightning_config:
+            modelckpt_cfg = lightning_config.modelcheckpoint
+        else:
+            modelckpt_cfg = OmegaConf.create()
+        modelckpt_cfg = OmegaConf.merge(default_modelckpt_cfg, modelckpt_cfg)
+        print(f"Merged modelckpt-cfg: \n{modelckpt_cfg}")
+        if version.parse(pl.__version__) < version.parse('1.4.0'):
+            trainer_kwargs["checkpoint_callback"] = instantiate_from_config(
+                modelckpt_cfg)
 
+        # add callback which sets up log directory
+        default_callbacks_cfg = {
+            "setup_callback": {
+                "target": "etc.SetupCallback",
+                "params": {
+                    "resume": opt.resume,
+                    "now": now,
+                    "logdir": logdir,
+                    "ckptdir": ckptdir,
+                    "cfgdir": cfgdir,
+                    "config": config,
+                    "lightning_config": lightning_config,
+                }
+            },
+            "image_logger": {
+                "target": "exps.T001-A0A.ImageLogger",
+                "params": {
+                    "batch_frequency": 750,
+                    "max_images": 4,
+                    "clamp": True
+                }
+            },
+            # "learning_rate_logger": {
+            #     "target": "LearningRateMonitor",
+            #     "params": {
+            #         "logging_interval": "step",
+            #         # "log_momentum": True
+            #     }
+            # },
+            "cuda_callback": {
+                "target": "etc.CUDACallback"
+            },
+        }
+        if version.parse(pl.__version__) >= version.parse('1.4.0'):
+            default_callbacks_cfg.update(
+                {'checkpoint_callback': modelckpt_cfg})
 
-    num_timestep = 50
-    eta = 1.0
-    timesteps, _ = gen_timestep(6)
+        if "callbacks" in lightning_config:
+            callbacks_cfg = lightning_config.callbacks
+        else:
+            callbacks_cfg = OmegaConf.create()
 
-    alphas = model.alphas_cumprod
-    sqrt_alphas = model.sqrt_alphas_cumprod
-    sqrt_betas = model.sqrt_one_minus_alphas_cumprod
-    unet = model.model
+        print(
+            'Caution: Saving checkpoints every n train steps without deleting. This might require some free space.'
+        )
+        default_metrics_over_trainsteps_ckpt_dict = {
+            'metrics_over_trainsteps_checkpoint': {
+                "target": 'pytorch_lightning.callbacks.ModelCheckpoint',
+                'params': {
+                    "dirpath": os.path.join(ckptdir, 'trainstep_checkpoints'),
+                    "filename": "{epoch:06}-{step:09}",
+                    "verbose": True,
+                    'save_top_k': -1,
+                    'every_n_train_steps': 5000,
+                    'save_weights_only': True
+                }
+            }
+        }
+        default_callbacks_cfg.update(default_metrics_over_trainsteps_ckpt_dict)
 
-    x_t = torch.randn(batch_size, 4, 64, 64).cuda()
+        callbacks_cfg = OmegaConf.merge(default_callbacks_cfg, callbacks_cfg)
+        if 'ignore_keys_callback' in callbacks_cfg and hasattr(
+                trainer_opt, 'resume_from_checkpoint'):
+            callbacks_cfg.ignore_keys_callback.params[
+                'ckpt_path'] = trainer_opt.resume_from_checkpoint
+        elif 'ignore_keys_callback' in callbacks_cfg:
+            del callbacks_cfg['ignore_keys_callback']
 
-    with torch.no_grad():
-        for i, value in enumerate(tqdm(dataloader)):
-            input = value['edit']['c_concat'].add(1).mul(0.5)
-            cond = value['edit']
-            cond['c_concat'] = [model.encode_first_stage(cond['c_concat'].cuda()).mode() * model.scale_factor]
+        trainer_kwargs["callbacks"] = [
+            instantiate_from_config(callbacks_cfg[k]) for k in callbacks_cfg
+        ]
 
-            # x, _ = model.sample_log(
-            #     cond,
-            #     batch_size,
-            #     use_ddim=True,
-            #     num_step=25,
-            # )
-            # exit()
+        trainer = Trainer.from_argparse_args(
+            trainer_opt,
+            plugins=DDPPlugin(find_unused_parameters=True),
+            **trainer_kwargs)
+        trainer.logdir = logdir  ###
 
-            cnt = len(timesteps)
-            for idx in tqdm(range(cnt)):
-                t = timesteps[idx]
-                ts = torch.full((batch_size,), t, dtype=torch.long).cuda()
-                e_t = unet(x_t, ts, cond['c_concat'])
-                x_0 = 1 / sqrt_alphas[t] * (x_t - sqrt_betas[t] * e_t)
-                if idx == cnt - 1:
-                    break
-                tm1 = timesteps[idx + 1]
-                sigma = eta * np.sqrt((1 - alphas[tm1].item()) / (1 - alphas[t].item()) * (1 - alphas[t].item() / alphas[tm1].item()))
-                x_t = sqrt_alphas[tm1] * x_0 + torch.sqrt(1 - alphas[tm1] - sigma ** 2) * e_t + sigma * torch.randn_like(x_t)
+        # data
+        data = instantiate_from_config(config.data)
+        data.prepare_data()
+        data.setup()
+        print("#### Data #####")
+        for k in data.datasets:
+            print(
+                f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}"
+            )
 
-            x = model.decode_first_stage(x_0)
-            x = x.add(1).mul(0.5).clamp(0, 1)
+        # configure learning rate
+        bs, base_lr = config.data.params.batch_size, config.model.base_learning_rate
+        if not cpu:
+            ngpu = len(lightning_config.trainer.gpus.strip(",").split(','))
+        else:
+            ngpu = 1
+        if 'accumulate_grad_batches' in lightning_config.trainer:
+            accumulate_grad_batches = lightning_config.trainer.accumulate_grad_batches
+        else:
+            accumulate_grad_batches = 1
+        print(f"accumulate_grad_batches = {accumulate_grad_batches}")
+        lightning_config.trainer.accumulate_grad_batches = accumulate_grad_batches
+        if opt.scale_lr:
+            model.learning_rate = accumulate_grad_batches * ngpu * bs * base_lr
+            print(
+                "Setting learning rate to {:.2e} = {} (accumulate_grad_batches) * {} (num_gpus) * {} (batchsize) * {:.2e} (base_lr)"
+                .format(model.learning_rate, accumulate_grad_batches, ngpu, bs,
+                        base_lr))
+        else:
+            model.learning_rate = base_lr
+            print("++++ NOT USING LR SCALING ++++")
+            print(f"Setting learning rate to {model.learning_rate:.2e}")
 
-            for j, item in enumerate(range(len(x))):
-                img_in = ToPILImage()(input[j])
-                img_in.save(join(logdir, f"{i*batch_size+j:04d}_input.png"))
-                img_out = ToPILImage()(x[j])
-                img_out.save(join(logdir, f"{i*batch_size+j:04d}_output.png"))
-            pass
-            exit()
+        # allow checkpointing via USR1
+        def melk(*args, **kwargs):
+            # run all checkpoint hooks
+            if trainer.global_rank == 0:
+                print("Summoning checkpoint.")
+                ckpt_path = os.path.join(ckptdir, "last.ckpt")
+                trainer.save_checkpoint(ckpt_path)
+
+        def divein(*args, **kwargs):
+            if trainer.global_rank == 0:
+                import pudb
+                pudb.set_trace()
+
+        import signal
+
+        signal.signal(signal.SIGUSR1, melk)
+        signal.signal(signal.SIGUSR2, divein)
+
+        # run
+        if opt.train:
+            try:
+                trainer.fit(model, data)
+            except Exception:
+                # melk()
+                raise
+        if not opt.no_test and not trainer.interrupted:
+            trainer.test(model, data)
+    except Exception:
+        if opt.debug and trainer.global_rank == 0:
+            try:
+                import pudb as debugger
+            except ImportError:
+                import pdb as debugger
+            debugger.post_mortem()
+        raise
+    finally:
+        # move newly created debug project to debug_runs
+        if opt.debug and not opt.resume and trainer.global_rank == 0:
+            dst, name = os.path.split(logdir)
+            dst = os.path.join(dst, "debug_runs", name)
+            os.makedirs(os.path.split(dst)[0], exist_ok=True)
+            os.rename(logdir, dst)
+        if trainer.global_rank == 0:
+            print(trainer.profiler.summary())

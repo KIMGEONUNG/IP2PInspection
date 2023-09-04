@@ -2258,21 +2258,6 @@ if __name__ == "__main__":
     batch_size = 4
     dataloader = DataLoader(dataset, batch_size=batch_size)
 
-    # schedules
-    def make_ddim_sigmas(alphacums, ddim_timesteps, eta):
-        alphas = alphacums[ddim_timesteps]
-        alphas_prev = np.asarray([alphacums[0]] + alphacums[ddim_timesteps[:-1]].tolist())
-        sigmas = eta * np.sqrt((1 - alphas_prev) / (1 - alphas) * (1 - alphas / alphas_prev))
-        return sigmas
-
-    def make_ddim_timesteps(num_ddim_timesteps):
-        c = 1000 // num_ddim_timesteps
-        ddim_timesteps = np.asarray(list(range(0, 1000, c)))
-
-        steps_out = ddim_timesteps + 1
-        # steps_out = ddim_timesteps
-        return steps_out
-
     def gen_timestep(stage=1):
         assert 1 <= stage <= 9
 
@@ -2288,16 +2273,28 @@ if __name__ == "__main__":
         return teacher, student
 
 
-    num_timestep = 50
+    def skewed(num=25, limit=999, pow=2.0, invert=False):
+        a = 1 / limit * num**pow
+        # print(a)
+        # print((1/a) * 250**2)
+        ts = (1 / a) * np.arange(1, num, 1)** pow
+        ts = list(ts.astype("int"))
+        if ts[0] != 0:
+            ts = [0] + ts
+        if ts[-1] != 999:
+            ts = ts + [999]
+
+        if invert:
+            ts = list(reversed([limit - i for i in ts]))
+        return ts
+
     eta = 1.0
-    timesteps, _ = gen_timestep(6)
 
     alphas = model.alphas_cumprod
     sqrt_alphas = model.sqrt_alphas_cumprod
     sqrt_betas = model.sqrt_one_minus_alphas_cumprod
     unet = model.model
 
-    x_t = torch.randn(batch_size, 4, 64, 64).cuda()
 
     with torch.no_grad():
         for i, value in enumerate(tqdm(dataloader)):
@@ -2305,33 +2302,30 @@ if __name__ == "__main__":
             cond = value['edit']
             cond['c_concat'] = [model.encode_first_stage(cond['c_concat'].cuda()).mode() * model.scale_factor]
 
-            # x, _ = model.sample_log(
-            #     cond,
-            #     batch_size,
-            #     use_ddim=True,
-            #     num_step=25,
-            # )
-            # exit()
+            skewed_1 = skewed(invert=False)
+            skewed_2 = skewed(invert=True)
+            uniform = np.linspace(skewed_1[0], skewed_1[-1], len(skewed_1)).astype('int')
 
-            cnt = len(timesteps)
-            for idx in tqdm(range(cnt)):
-                t = timesteps[idx]
-                ts = torch.full((batch_size,), t, dtype=torch.long).cuda()
-                e_t = unet(x_t, ts, cond['c_concat'])
-                x_0 = 1 / sqrt_alphas[t] * (x_t - sqrt_betas[t] * e_t)
-                if idx == cnt - 1:
-                    break
-                tm1 = timesteps[idx + 1]
-                sigma = eta * np.sqrt((1 - alphas[tm1].item()) / (1 - alphas[t].item()) * (1 - alphas[t].item() / alphas[tm1].item()))
-                x_t = sqrt_alphas[tm1] * x_0 + torch.sqrt(1 - alphas[tm1] - sigma ** 2) * e_t + sigma * torch.randn_like(x_t)
+            for key, timesteps in {"uni": uniform, "sk1": skewed_1, "sk2": skewed_2}.items():
+                x_t = torch.randn(batch_size, 4, 64, 64).cuda()
+                cnt = len(timesteps)
+                timesteps = list(reversed(timesteps))
+                for idx in tqdm(range(cnt)):
+                    t = timesteps[idx]
+                    ts = torch.full((batch_size,), t, dtype=torch.long).cuda()
+                    e_t = unet(x_t, ts, cond['c_concat'])
+                    x_0 = 1 / sqrt_alphas[t] * (x_t - sqrt_betas[t] * e_t)
 
-            x = model.decode_first_stage(x_0)
-            x = x.add(1).mul(0.5).clamp(0, 1)
+                    x = model.decode_first_stage(x_0)
+                    x = x.add(1).mul(0.5).clamp(0, 1)
 
-            for j, item in enumerate(range(len(x))):
-                img_in = ToPILImage()(input[j])
-                img_in.save(join(logdir, f"{i*batch_size+j:04d}_input.png"))
-                img_out = ToPILImage()(x[j])
-                img_out.save(join(logdir, f"{i*batch_size+j:04d}_output.png"))
-            pass
+                    for j, item in enumerate(range(len(x))):
+                        img_out = ToPILImage()(x[j])
+                        img_out.save(join(logdir, f"{key}_{i*batch_size+j:04d}_{t:03d}.png"))
+
+                    if idx == cnt - 1:
+                        break
+                    tm1 = timesteps[idx + 1]
+                    sigma = eta * np.sqrt((1 - alphas[tm1].item()) / (1 - alphas[t].item()) * (1 - alphas[t].item() / alphas[tm1].item()))
+                    x_t = sqrt_alphas[tm1] * x_0 + torch.sqrt(1 - alphas[tm1] - sigma ** 2) * e_t + sigma * torch.randn_like(x_t)
             exit()
