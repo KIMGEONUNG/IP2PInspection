@@ -85,15 +85,16 @@ data:
     batch_size: 16
     num_workers: 8
     train:
-      target: edit_dataset.GaussianBlurDataset
+      target: edit_dataset.NoiseDataset
       params:
         path: DATASET/openimage
         split: train
         resize_res: 512
-        flip_prob: 0.5
+        sigma: 0.5
     validation:
-      target: edit_dataset.GaussianBlurDataset
+      target: edit_dataset.NoiseDataset
       params:
         path: DATASET/openimage
         split: val
         resize_res: 512
+        sigma: 0.5
