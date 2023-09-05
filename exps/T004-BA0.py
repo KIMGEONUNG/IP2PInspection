@@ -2129,9 +2129,9 @@ class LatentDiffusion(DDPM):
 
     def on_train_epoch_start(self):
         cycle = 2
-        if self.current_epoch % cycle:
+        if self.current_epoch % cycle == 0:
             self.set_teacher_from_student()
-        self.id_stage = self.current_epoch // cycle
+        self.id_stage = self.current_epoch // cycle + 1
         self.set_timesteps(self.id_stage)
 
     def on_train_epoch_end(self):
