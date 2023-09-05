@@ -2128,7 +2128,11 @@ class LatentDiffusion(DDPM):
         return teacher, student
 
     def on_train_epoch_start(self):
-        pass
+        cycle = 2
+        if self.current_epoch % cycle:
+            self.set_teacher_from_student()
+        self.id_stage = self.current_epoch // cycle
+        self.set_timesteps(self.id_stage)
 
     def on_train_epoch_end(self):
         pass
@@ -2456,7 +2460,8 @@ if __name__ == "__main__":
         ]
 
         trainer_kwargs["max_epochs"] = 16
-        trainer_kwargs["max_steps"] = 2 # tmp
+        # trainer_kwargs["max_steps"] = 2 # tmp
+        trainer_kwargs["limit_train_batches"] = 2 # tmp
         trainer = Trainer.from_argparse_args(
             trainer_opt,
             plugins=DDPPlugin(find_unused_parameters=True),
