@@ -2127,6 +2127,12 @@ class LatentDiffusion(DDPM):
         student = student[:-1]  # The last index should not be selected
         return teacher, student
 
+    def on_train_epoch_start(self, trainer, pl_module):
+        pass
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        pass
+
 
 class DiffusionWrapper(pl.LightningModule):
     def __init__(self, diff_model_config, conditioning_key):
