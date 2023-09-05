@@ -2273,8 +2273,8 @@ def nondefault_trainer_args(opt):
 
 
 if __name__ == "__main__":
-    # now = datetime.datetime.now(timezone('Asia/Seoul')).strftime("%Y-%m-%d-%H-%M-%S")
-    now = 'fix'
+    now = datetime.datetime.now(timezone('Asia/Seoul')).strftime("%Y-%m-%d-%H-%M-%S")
+    # now = 'fix'
     sys.path.append(os.getcwd())
 
     parser = get_parser()
@@ -2461,7 +2461,7 @@ if __name__ == "__main__":
 
         trainer_kwargs["max_epochs"] = 16
         # trainer_kwargs["max_steps"] = 2 # tmp
-        trainer_kwargs["limit_train_batches"] = 2 # tmp
+        # trainer_kwargs["limit_train_batches"] = 2 # tmp
         trainer = Trainer.from_argparse_args(
             trainer_opt,
             plugins=DDPPlugin(find_unused_parameters=True),
