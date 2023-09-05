@@ -2392,7 +2392,7 @@ if __name__ == "__main__":
                 }
             },
             "image_logger": {
-                "target": "exps.T001-A0A.ImageLogger",
+                "target": f"exps.{cfn}.ImageLogger",
                 "params": {
                     "batch_frequency": 750,
                     "max_images": 4,
@@ -2449,6 +2449,8 @@ if __name__ == "__main__":
             instantiate_from_config(callbacks_cfg[k]) for k in callbacks_cfg
         ]
 
+        trainer_kwargs["max_epochs"] = 16
+        trainer_kwargs["max_steps"] = 2 # tmp
         trainer = Trainer.from_argparse_args(
             trainer_opt,
             plugins=DDPPlugin(find_unused_parameters=True),
