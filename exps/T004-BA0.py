@@ -1901,7 +1901,7 @@ class LatentDiffusion(DDPM):
         eta = 1.0
 
         timesteps = self.timesteps_student.clone()
-        timesteps = torch.cat([timesteps, torch.LongTensor([0]).to(self.device)])
+        timesteps = torch.cat([timesteps, torch.LongTensor([0])])
         cnt = len(timesteps)
         for idx in tqdm(range(cnt)):
             t = timesteps[idx]
