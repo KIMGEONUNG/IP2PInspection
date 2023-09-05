@@ -2127,10 +2127,10 @@ class LatentDiffusion(DDPM):
         student = student[:-1]  # The last index should not be selected
         return teacher, student
 
-    def on_train_epoch_start(self, trainer, pl_module):
+    def on_train_epoch_start(self):
         pass
 
-    def on_train_epoch_end(self, trainer, pl_module):
+    def on_train_epoch_end(self):
         pass
 
 
