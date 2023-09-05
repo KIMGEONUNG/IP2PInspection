@@ -1893,17 +1893,28 @@ class LatentDiffusion(DDPM):
     @torch.no_grad()
     def sample_log(self,cond,batch_size,ddim, ddim_steps, start_T= None, **kwargs):
 
-        if ddim:
-            ddim_sampler = DDIMSampler(self)
-            shape = (self.channels, self.image_size, self.image_size)
-            samples, intermediates =ddim_sampler.sample(ddim_steps,batch_size,
-                                                        shape,cond,verbose=False,**kwargs)
+        x_t = torch.randn(batch_size, 4, 64, 64).to(self.device)
+        alphas = self.alphas_cumprod
+        sqrt_alphas = self.sqrt_alphas_cumprod
+        sqrt_betas = self.sqrt_one_minus_alphas_cumprod
+        unet = self.model
+        eta = 1.0
 
-        else:
-            samples, intermediates = self.sample(cond=cond, batch_size=batch_size, start_T=start_T,
-                                                 return_intermediates=True,**kwargs)
+        timesteps = self.timesteps_student.clone()
+        timesteps = torch.cat([timesteps, torch.LongTensor([0]).to(self.device)])
+        cnt = len(timesteps)
+        for idx in tqdm(range(cnt)):
+            t = timesteps[idx]
+            ts = torch.full((batch_size,), t, dtype=torch.long).cuda()
+            e_t = unet(x_t, ts, cond['c_concat'])
+            x_0 = 1 / sqrt_alphas[t] * (x_t - sqrt_betas[t] * e_t)
+            if idx == cnt - 1:
+                break
+            tm1 = timesteps[idx + 1]
+            sigma = eta * np.sqrt((1 - alphas[tm1].item()) / (1 - alphas[t].item()) * (1 - alphas[t].item() / alphas[tm1].item()))
+            x_t = sqrt_alphas[tm1] * x_0 + torch.sqrt(1 - alphas[tm1] - sigma ** 2) * e_t + sigma * torch.randn_like(x_t)
 
-        return samples, intermediates
+        return x_0, None
 
 
     @torch.no_grad()
