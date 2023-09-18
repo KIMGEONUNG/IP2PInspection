@@ -1,5 +1,4 @@
 import argparse, os, sys, datetime, glob
-import copy
 from torchvision.transforms import ToPILImage
 from torch.utils.data import DataLoader
 from PIL import Image
@@ -505,9 +504,6 @@ class UNetModel(nn.Module):
                 )
             ]
         )
-        self.middle_block = TimestepEmbedSequential(conv_nd(dims, 640, 1280, 3, padding=1))
-        self.middle_block = conv_nd(dims, 640, 1280, 3, padding=1)
-        # self.middle_block = nn.Conv2d(640, 1280, 3, 1, 1)
 
         self._feature_size = model_channels
         input_block_chans = [model_channels]
@@ -583,7 +579,33 @@ class UNetModel(nn.Module):
         if legacy:
             #num_heads = 1
             dim_head = ch // num_heads if use_spatial_transformer else num_head_channels
-
+        self.middle_block = TimestepEmbedSequential(
+            ResBlock(
+                ch,
+                time_embed_dim,
+                dropout,
+                dims=dims,
+                use_checkpoint=use_checkpoint,
+                use_scale_shift_norm=use_scale_shift_norm,
+            ),
+            AttentionBlock(
+                ch,
+                use_checkpoint=use_checkpoint,
+                num_heads=num_heads,
+                num_head_channels=dim_head,
+                use_new_attention_order=use_new_attention_order,
+            ) if not use_spatial_transformer else SpatialTransformer(
+                            ch, num_heads, dim_head, depth=transformer_depth, context_dim=context_dim
+                        ),
+            ResBlock(
+                ch,
+                time_embed_dim,
+                dropout,
+                dims=dims,
+                use_checkpoint=use_checkpoint,
+                use_scale_shift_norm=use_scale_shift_norm,
+            ),
+        )
         self._feature_size += ch
 
         self.output_blocks = nn.ModuleList([])
@@ -642,7 +664,6 @@ class UNetModel(nn.Module):
                 self.output_blocks.append(TimestepEmbedSequential(*layers))
                 self._feature_size += ch
 
-
         self.out = nn.Sequential(
             normalization(ch),
             nn.SiLU(),
@@ -692,20 +713,19 @@ class UNetModel(nn.Module):
             assert y.shape == (x.shape[0],)
             emb = emb + self.label_emb(y)
 
-        # del_encode_idxs = [6, 7, 8, 9, 10, 11]
-        # del_decode_idxs = [0, 1, 2, 3, 4, 5]
+        del_encode_idxs = [5, 6, 7, 8, 9, 10, 11]
+        del_decode_idxs = [0, 1, 2, 3, 4, 5, 6]
 
         h = x.type(self.dtype)
         for i, module in enumerate(self.input_blocks):
-            # if i in del_encode_idxs:
-            #     continue
+            if i in del_encode_idxs:
+                continue
             h = module(h, emb, context)
             hs.append(h)
         # h = self.middle_block(h, emb, context)
-        h = self.middle_block(h)
         for i, module in enumerate(self.output_blocks):
-            # if i in del_decode_idxs:
-            #     continue
+            if i in del_decode_idxs:
+                continue
             h = th.cat([h, hs.pop()], dim=1)
             h = module(h, emb, context)
         h = h.type(x.dtype)
@@ -715,12 +735,13 @@ class UNetModel(nn.Module):
             return self.out(h)
 
     def reform(self):
-        del_encode_idxs = [6, 7, 8, 9, 10, 11]
-        del_decode_idxs = [0, 1, 2, 3, 4, 5]
-        for i in reversed(sorted(del_encode_idxs)):
-            del self.input_blocks[i]
-        for i in reversed(sorted(del_decode_idxs)):
-            del self.output_blocks[i]
+        pass
+        # del_encode_idxs = []
+        # del_decode_idxs = []
+        # for i in reversed(sorted(del_encode_idxs)):
+        #     del self.input_blocks[i]
+        # for i in reversed(sorted(del_decode_idxs)):
+        #     del self.output_blocks[i]
 
 
 
@@ -881,13 +902,36 @@ class DDPM(pl.LightningModule):
                     print(f"{context}: Restored training weights")
 
     def init_from_ckpt(self, path, ignore_keys=list(), only_model=False):
-        self.model.diffusion_model.reform()
         sd = torch.load(path, map_location="cpu")
-
         if "state_dict" in list(sd.keys()):
             sd = sd["state_dict"]
+        keys = list(sd.keys())
+
+        # Our model adds additional channels to the first layer to condition on an input image.
+        # For the first layer, copy existing channel weights and initialize new channel weights to zero.
+        input_keys = [
+            "model.diffusion_model.input_blocks.0.0.weight",
+            "model_ema.diffusion_modelinput_blocks00weight",
+        ]
 
         self_sd = self.state_dict()
+        for input_key in input_keys:
+            if input_key not in sd or input_key not in self_sd:
+                continue
+
+            input_weight = self_sd[input_key]
+
+            if input_weight.size() != sd[input_key].size():
+                print(f"Manual init: {input_key}")
+                input_weight.zero_()
+                input_weight[:, :4, :, :].copy_(sd[input_key])
+                ignore_keys.append(input_key)
+
+        for k in keys:
+            for ik in ignore_keys:
+                if k.startswith(ik):
+                    print("Deleting key {} from state_dict.".format(k))
+                    del sd[k]
         missing, unexpected = self.load_state_dict(sd, strict=False) if not only_model else self.model.load_state_dict(
             sd, strict=False)
         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
@@ -1167,12 +1211,6 @@ class LatentDiffusion(DDPM):
                 self.model_ema = LitEma(self.model)
                 print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
 
-        self.teacher = None
-
-        self.set_teacher_from_student()
-        self.id_stage = 1
-        self.set_timesteps(self.id_stage)
-
     def make_cond_schedule(self, ):
         self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
         ids = torch.round(torch.linspace(0, self.num_timesteps - 1, self.num_timesteps_cond)).long()
@@ -1211,6 +1249,27 @@ class LatentDiffusion(DDPM):
         for param in self.first_stage_model.parameters():
             param.requires_grad = False
 
+    # def instantiate_cond_stage(self, config):
+    #     if not self.cond_stage_trainable:
+    #         if config == "__is_first_stage__":
+    #             print("Using first stage also as cond stage.")
+    #             self.cond_stage_model = self.first_stage_model
+    #         elif config == "__is_unconditional__":
+    #             print(f"Training {self.__class__.__name__} as an unconditional model.")
+    #             self.cond_stage_model = None
+    #             # self.be_unconditional = True
+    #         else:
+    #             model = instantiate_from_config(config)
+    #             self.cond_stage_model = model.eval()
+    #             self.cond_stage_model.train = disabled_train
+    #             for param in self.cond_stage_model.parameters():
+    #                 param.requires_grad = False
+    #     else:
+    #         assert config != '__is_first_stage__'
+    #         assert config != '__is_unconditional__'
+    #         model = instantiate_from_config(config)
+    #         self.cond_stage_model = model
+    #
     def _get_denoise_row_from_list(self, samples, desc='', force_no_decoder_quantization=False):
         denoise_row = []
         for zd in tqdm(samples, desc=desc):
@@ -1535,22 +1594,32 @@ class LatentDiffusion(DDPM):
         return loss
 
     def forward(self, x, c, *args, **kwargs):
+        t_begin = 0
+        t_end = self.num_timesteps
 
-        t = torch.randint(0, len(self.timesteps_student), (x.shape[0],)).long()
-        ts = self.timesteps_student[t].long()
+        if self.custom_timesteps_range is not None:
+            t_begin = self.custom_timesteps_range[0]
+            t_end = self.custom_timesteps_range[1]
 
-        tm1, tm2 = [], []
-        for t in ts:
-            idx = (t == self.timesteps_teacher).nonzero(as_tuple=True)[0].item()
-            tm1.append(self.timesteps_teacher[idx + 1])
-            tm2.append(self.timesteps_teacher[idx + 2])
+        t = torch.randint(t_begin, t_end, (x.shape[0],), device=self.device).long()
+        if self.model.conditioning_key is not None:
+            assert c is not None
+            if self.cond_stage_trainable:
+                c = self.get_learned_conditioning(c)
+            if self.shorten_cond_schedule:  # TODO: drop this option
+                tc = self.cond_ids[t].to(self.device)
+                c = self.q_sample(x_start=c, t=tc, noise=torch.randn_like(c.float()))
+        return self.p_losses(x, c, t, *args, **kwargs)
 
-        ts = ts.to(self.device)
-        tm1 = torch.LongTensor(tm1).to(self.device)
-        tm2 = torch.LongTensor(tm2).to(self.device)
+    def _rescale_annotations(self, bboxes, crop_coordinates):  # TODO: move to dataset
+        def rescale_bbox(bbox):
+            x0 = clamp((bbox[0] - crop_coordinates[0]) / crop_coordinates[2])
+            y0 = clamp((bbox[1] - crop_coordinates[1]) / crop_coordinates[3])
+            w = min(bbox[2] / crop_coordinates[2], 1 - x0)
+            h = min(bbox[3] / crop_coordinates[3], 1 - y0)
+            return x0, y0, w, h
 
-        return self.p_losses(x, c, ts, tm1, tm2, *args, **kwargs)
-
+        return [rescale_bbox(b) for b in bboxes]
 
     def apply_model(self, x_noisy, t, cond, return_ids=False):
 
@@ -1673,28 +1742,37 @@ class LatentDiffusion(DDPM):
         kl_prior = normal_kl(mean1=qt_mean, logvar1=qt_log_variance, mean2=0.0, logvar2=0.0)
         return mean_flat(kl_prior) / np.log(2.0)
 
-    def p_losses(self, x_start, cond, t, tm1, tm2, noise=None):
-        prefix = 'train' if self.training else 'val'
-
+    def p_losses(self, x_start, cond, t, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
-        z_t = self.q_sample(x_start=x_start, t=t, noise=noise)
-
-        # 2 STEPS OF DDIM WITH TEACHER
-        z_tm1 = self.ddim1step_techer(z_t, t, tm1, cond)
-        z_tm2 = self.ddim1step_techer(z_tm1, tm1, tm2, cond)
-        target = self.get_teacher_supervision(z_t, z_tm2, t, tm2)
-
-        # GET STUDENT OUTPUT
-        e_t = self.apply_model(z_t, t, cond)
-        x0_hat = self.get_pseudo_x0(z_t, e_t, t)
+        x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        model_output = self.apply_model(x_noisy, t, cond)
 
         loss_dict = {}
-        loss_simple = self.get_loss(x0_hat, target, mean=False).mean([1, 2, 3])
+        prefix = 'train' if self.training else 'val'
 
-        snr = self.get_snr(t)
-        weight = 1 + snr
-        loss = (weight * loss_simple).mean()
+        if self.parameterization == "x0":
+            target = x_start
+        elif self.parameterization == "eps":
+            target = noise
+        else:
+            raise NotImplementedError()
 
+        loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
+        loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
+
+        logvar_t = self.logvar[t.cpu()].to(self.device)
+        loss = loss_simple / torch.exp(logvar_t) + logvar_t
+        # loss = loss_simple / torch.exp(self.logvar) + self.logvar
+        if self.learn_logvar:
+            loss_dict.update({f'{prefix}/loss_gamma': loss.mean()})
+            loss_dict.update({'logvar': self.logvar.data.mean()})
+
+        loss = self.l_simple_weight * loss.mean()
+
+        loss_vlb = self.get_loss(model_output, target, mean=False).mean(dim=(1, 2, 3))
+        loss_vlb = (self.lvlb_weights[t] * loss_vlb).mean()
+        loss_dict.update({f'{prefix}/loss_vlb': loss_vlb})
+        loss += (self.original_elbo_weight * loss_vlb)
         loss_dict.update({f'{prefix}/loss': loss})
 
         return loss, loss_dict
@@ -1893,28 +1971,17 @@ class LatentDiffusion(DDPM):
     @torch.no_grad()
     def sample_log(self,cond,batch_size,ddim, ddim_steps, start_T= None, **kwargs):
 
-        x_t = torch.randn(batch_size, 4, 64, 64).to(self.device)
-        alphas = self.alphas_cumprod
-        sqrt_alphas = self.sqrt_alphas_cumprod
-        sqrt_betas = self.sqrt_one_minus_alphas_cumprod
-        unet = self.model
-        eta = 1.0
+        if ddim:
+            ddim_sampler = DDIMSampler(self)
+            shape = (self.channels, self.image_size, self.image_size)
+            samples, intermediates =ddim_sampler.sample(ddim_steps,batch_size,
+                                                        shape,cond,verbose=False,**kwargs)
 
-        timesteps = self.timesteps_student.clone()
-        timesteps = torch.cat([timesteps, torch.LongTensor([0])])
-        cnt = len(timesteps)
-        for idx in tqdm(range(cnt)):
-            t = timesteps[idx]
-            ts = torch.full((batch_size,), t, dtype=torch.long).cuda()
-            e_t = unet(x_t, ts, cond['c_concat'])
-            x_0 = 1 / sqrt_alphas[t] * (x_t - sqrt_betas[t] * e_t)
-            if idx == cnt - 1:
-                break
-            tm1 = timesteps[idx + 1]
-            sigma = eta * np.sqrt((1 - alphas[tm1].item()) / (1 - alphas[t].item()) * (1 - alphas[t].item() / alphas[tm1].item()))
-            x_t = sqrt_alphas[tm1] * x_0 + torch.sqrt(1 - alphas[tm1] - sigma ** 2) * e_t + sigma * torch.randn_like(x_t)
+        else:
+            samples, intermediates = self.sample(cond=cond, batch_size=batch_size, start_T=start_T,
+                                                 return_intermediates=True,**kwargs)
 
-        return x_0, None
+        return samples, intermediates
 
 
     @torch.no_grad()
@@ -2068,76 +2135,6 @@ class LatentDiffusion(DDPM):
         x = 2. * (x - x.min()) / (x.max() - x.min()) - 1.
         return x
 
-    def set_teacher_from_student(self):
-        with self.ema_scope():
-            if self.teacher:
-                self.teacher.load_state_dict(self.model.state_dict())
-            else:
-                self.teacher = copy.deepcopy(self.model)
-
-    def set_timesteps(self, stage):
-        teacher, student = self.gen_timestep(stage)
-        self.timesteps_teacher = torch.LongTensor(teacher)
-        self.timesteps_student = torch.LongTensor(student)
-
-    def get_pseudo_x0(self, z_t, e_t, t):
-        sqrt_alphas = self.sqrt_alphas_cumprod
-        sqrt_betas = self.sqrt_one_minus_alphas_cumprod
-
-        x_0 = 1 / sqrt_alphas[t].view(-1, 1, 1, 1) * (z_t - sqrt_betas[t].view(-1, 1, 1, 1) * e_t)
-        return x_0
-
-    def get_snr(self, t):
-        alphas = self.sqrt_alphas_cumprod
-        sigmas = self.sqrt_one_minus_alphas_cumprod
-        return (alphas[t] ** 2) / (sigmas[t] ** 2)
-
-    @torch.no_grad()
-    def ddim1step_techer(self, z_t, t, tm1, cond):
-        e_t = self.teacher(z_t, t, **cond)
-
-        sqrt_alphas = self.sqrt_alphas_cumprod
-        sqrt_betas = self.sqrt_one_minus_alphas_cumprod
-
-        x_0 = 1 / sqrt_alphas[t].view(-1, 1, 1, 1) * (z_t - sqrt_betas[t].view(-1, 1, 1, 1) * e_t)
-        z_tm1 = sqrt_alphas[tm1].view(-1, 1, 1, 1) * x_0 + sqrt_betas[tm1].view(-1, 1, 1, 1) * e_t
-        return z_tm1
-
-    @torch.no_grad()
-    def get_teacher_supervision(self, z_t, z_tm2, t, tm2):
-        # The alpha and sigma notation is based on V-prediction paper.
-        alphas = self.sqrt_alphas_cumprod
-        sigmas = self.sqrt_one_minus_alphas_cumprod
-
-        numerator = z_tm2 - (sigmas[tm2] / sigmas[t]).view(-1, 1, 1, 1) * z_t
-        denominator = (alphas[tm2] - (sigmas[tm2] / sigmas[t]) * alphas[t]).view(-1, 1, 1, 1)
-
-        return numerator / denominator
-
-    def gen_timestep(self, stage=1):
-        assert 1 <= stage <= 9
-
-        # Start from 2^N timesteps
-        seq = list(reversed(range(1, 1000)))
-        seq = seq[::2] + seq[1:][::2][:13]
-
-        teacher = list(sorted(seq, reverse=True))
-        for i in range(stage - 1):
-            teacher = teacher[::2]
-        student = list(teacher)[::2]
-        student = student[:-1]  # The last index should not be selected
-        return teacher, student
-
-    def on_train_epoch_start(self):
-        cycle = 2
-        if self.current_epoch % cycle == 0:
-            self.set_teacher_from_student()
-        self.id_stage = self.current_epoch // cycle + 1
-        self.set_timesteps(self.id_stage)
-
-    def on_train_epoch_end(self):
-        pass
-
 
 class DiffusionWrapper(pl.LightningModule):
     def __init__(self, diff_model_config, conditioning_key):
@@ -2212,7 +2209,7 @@ def get_parser(**parser_kwargs):
         "--train",
         type=str2bool,
         const=True,
-        default=True,
+        default=False,
         nargs="?",
         help="train",
     )
@@ -2275,278 +2272,53 @@ def nondefault_trainer_args(opt):
 
 if __name__ == "__main__":
     now = datetime.datetime.now(timezone('Asia/Seoul')).strftime("%Y-%m-%d-%H-%M-%S")
-    # now = 'fix'
     sys.path.append(os.getcwd())
-
-    parser = get_parser()
-    parser = Trainer.add_argparse_args(parser)
-
-    opt, unknown = parser.parse_known_args()
     cfn = Path(os.path.basename(__file__)).stem
-    opt.base = [join("configs/", f"{cfn}.yaml")]
+    path_config = join("configs/", f"{cfn}.yaml")
+
+    # load configuration
+    config = OmegaConf.load(path_config)
+    config.model.target = config.model.target.format(cfn)
+    config.model.params.unet_config.target= config.model.params.unet_config.target.format(cfn)
 
     # assert opt.name
-    cfg_fname = os.path.split(opt.base[0])[-1]
+    cfg_fname = os.path.split(path_config)[-1]
     cfg_name = os.path.splitext(cfg_fname)[0]
     nowname = f"{cfg_name}_{now}"
-    logdir = os.path.join(opt.logdir, nowname)
-    ckpt = os.path.join(logdir, "checkpoints", "last.ckpt")
-    resume = False
-
-    if os.path.isfile(ckpt):
-        opt.resume_from_checkpoint = ckpt
-        base_configs = sorted(glob.glob(os.path.join(logdir,
-                                                     "configs/*.yaml")))
-        opt.base = base_configs + opt.base
-        _tmp = logdir.split("/")
-        nowname = _tmp[-1]
-        resume = True
-
-    ckptdir = os.path.join(logdir, "checkpoints")
-    cfgdir = os.path.join(logdir, "configs")
-
+    logdir = os.path.join("logs", nowname)
     os.makedirs(logdir, exist_ok=True)
-    os.makedirs(ckptdir, exist_ok=True)
-    os.makedirs(cfgdir, exist_ok=True)
 
-    try:
-        # init and save configs
-        configs = [OmegaConf.load(cfg) for cfg in opt.base]
-        cli = OmegaConf.from_dotlist(unknown)
-        config = OmegaConf.merge(*configs, cli)
+    # model
+    model = instantiate_from_config(config.model)
+    model.cuda()
+    model.eval()
 
-        config.model.target = config.model.target.format(cfn)
-        config.model.params.unet_config.target= config.model.params.unet_config.target.format(cfn)
+    # data
+    data = instantiate_from_config(config.data)
+    data.prepare_data()
+    data.setup()
 
-        if resume:
-            # By default, when finetuning from Stable Diffusion, we load the EMA-only checkpoint to initialize all weights.
-            # If resuming InstructPix2Pix from a finetuning checkpoint, instead load both EMA and non-EMA weights.
-            config.model.params.load_ema = True
-
-        lightning_config = config.pop("lightning", OmegaConf.create())
-        # merge trainer cli with config
-        trainer_config = lightning_config.get("trainer", OmegaConf.create())
-        # default to ddp
-        trainer_config["accelerator"] = "ddp"
-        trainer_config["gpus"] = "0,"
-        for k in nondefault_trainer_args(opt):
-            trainer_config[k] = getattr(opt, k)
-        if not "gpus" in trainer_config:
-            del trainer_config["accelerator"]
-            cpu = True
-        else:
-            gpuinfo = trainer_config["gpus"]
-            print(f"Running on GPUs {gpuinfo}")
-            cpu = False
-        trainer_opt = argparse.Namespace(**trainer_config)
-        lightning_config.trainer = trainer_config
-
-        # model
-        model = instantiate_from_config(config.model)
-        for i in range(1, 18):
-            print('stage: ', i)
-            print(model.gen_timestep(i))
-        exit()
-        # model.model.diffusion_model.reform()
-
-        # trainer and callbacks
-        trainer_kwargs = dict()
-
-        # default logger configs
-        default_logger_cfgs = {
-            "testtube": {
-                "target": "pytorch_lightning.loggers.TestTubeLogger",
-                "params": {
-                    "name": "testtube",
-                    "save_dir": logdir,
-                }
-            },
-        }
-        default_logger_cfg = default_logger_cfgs["testtube"]
-        if "logger" in lightning_config:
-            logger_cfg = lightning_config.logger
-        else:
-            logger_cfg = OmegaConf.create()
-        logger_cfg = OmegaConf.merge(default_logger_cfg, logger_cfg)
-        trainer_kwargs["logger"] = instantiate_from_config(logger_cfg)
-
-        # modelcheckpoint - use TrainResult/EvalResult(checkpoint_on=metric) to
-        # specify which metric is used to determine best models
-        default_modelckpt_cfg = {
-            "target": "pytorch_lightning.callbacks.ModelCheckpoint",
-            "params": {
-                "dirpath": ckptdir,
-                "filename": "{epoch:06}",
-                "verbose": True,
-                "save_last": False,
-            }
-        }
-
-        if "modelcheckpoint" in lightning_config:
-            modelckpt_cfg = lightning_config.modelcheckpoint
-        else:
-            modelckpt_cfg = OmegaConf.create()
-        modelckpt_cfg = OmegaConf.merge(default_modelckpt_cfg, modelckpt_cfg)
-        print(f"Merged modelckpt-cfg: \n{modelckpt_cfg}")
-        if version.parse(pl.__version__) < version.parse('1.4.0'):
-            trainer_kwargs["checkpoint_callback"] = instantiate_from_config(
-                modelckpt_cfg)
-
-        # add callback which sets up log directory
-        default_callbacks_cfg = {
-            "setup_callback": {
-                "target": "etc.SetupCallback",
-                "params": {
-                    "resume": opt.resume,
-                    "now": now,
-                    "logdir": logdir,
-                    "ckptdir": ckptdir,
-                    "cfgdir": cfgdir,
-                    "config": config,
-                    "lightning_config": lightning_config,
-                }
-            },
-            "image_logger": {
-                "target": f"exps.{cfn}.ImageLogger",
-                "params": {
-                    "batch_frequency": 750,
-                    "max_images": 4,
-                    "clamp": True
-                }
-            },
-            # "learning_rate_logger": {
-            #     "target": "LearningRateMonitor",
-            #     "params": {
-            #         "logging_interval": "step",
-            #         # "log_momentum": True
-            #     }
-            # },
-            "cuda_callback": {
-                "target": "etc.CUDACallback"
-            },
-        }
-        if version.parse(pl.__version__) >= version.parse('1.4.0'):
-            default_callbacks_cfg.update(
-                {'checkpoint_callback': modelckpt_cfg})
-
-        if "callbacks" in lightning_config:
-            callbacks_cfg = lightning_config.callbacks
-        else:
-            callbacks_cfg = OmegaConf.create()
-
-        print(
-            'Caution: Saving checkpoints every n train steps without deleting. This might require some free space.'
-        )
-        default_metrics_over_trainsteps_ckpt_dict = {
-            'metrics_over_trainsteps_checkpoint': {
-                "target": 'pytorch_lightning.callbacks.ModelCheckpoint',
-                'params': {
-                    "dirpath": os.path.join(ckptdir, 'trainstep_checkpoints'),
-                    "filename": "{epoch:06}-{step:09}",
-                    "verbose": True,
-                    'save_top_k': -1,
-                    'every_n_train_steps': 5000,
-                    'save_weights_only': True
-                }
-            }
-        }
-        default_callbacks_cfg.update(default_metrics_over_trainsteps_ckpt_dict)
-
-        callbacks_cfg = OmegaConf.merge(default_callbacks_cfg, callbacks_cfg)
-        if 'ignore_keys_callback' in callbacks_cfg and hasattr(
-                trainer_opt, 'resume_from_checkpoint'):
-            callbacks_cfg.ignore_keys_callback.params[
-                'ckpt_path'] = trainer_opt.resume_from_checkpoint
-        elif 'ignore_keys_callback' in callbacks_cfg:
-            del callbacks_cfg['ignore_keys_callback']
-
-        trainer_kwargs["callbacks"] = [
-            instantiate_from_config(callbacks_cfg[k]) for k in callbacks_cfg
-        ]
-
-        trainer_kwargs["max_epochs"] = 16
-        # trainer_kwargs["max_steps"] = 2 # tmp
-        # trainer_kwargs["limit_train_batches"] = 2 # tmp
-        trainer = Trainer.from_argparse_args(
-            trainer_opt,
-            plugins=DDPPlugin(find_unused_parameters=True),
-            **trainer_kwargs)
-        trainer.logdir = logdir  ###
-
-        # data
-        data = instantiate_from_config(config.data)
-        data.prepare_data()
-        data.setup()
-        print("#### Data #####")
-        for k in data.datasets:
-            print(
-                f"{k}, {data.datasets[k].__class__.__name__}, {len(data.datasets[k])}"
+    dataset = data.datasets['validation']
+    batch_size = 12
+    dataloader = DataLoader(dataset, batch_size=batch_size)
+    use_ddim = False
+    num_step = 25
+    with torch.no_grad():
+        for i, value in enumerate(tqdm(dataloader)):
+            input = value['edit']['c_concat'].add(1).mul(0.5)
+            cond = value['edit']
+            cond['c_concat'] = [model.encode_first_stage(cond['c_concat'].cuda()).mode() * model.scale_factor]
+            x, _ = model.sample_log(
+                cond,
+                batch_size,
+                use_ddim,
+                num_step,
             )
+            x = model.decode_first_stage(x)
+            x = x.add(1).mul(0.5).clamp(0, 1)
 
-        # configure learning rate
-        bs, base_lr = config.data.params.batch_size, config.model.base_learning_rate
-        if not cpu:
-            ngpu = len(lightning_config.trainer.gpus.strip(",").split(','))
-        else:
-            ngpu = 1
-        if 'accumulate_grad_batches' in lightning_config.trainer:
-            accumulate_grad_batches = lightning_config.trainer.accumulate_grad_batches
-        else:
-            accumulate_grad_batches = 1
-        print(f"accumulate_grad_batches = {accumulate_grad_batches}")
-        lightning_config.trainer.accumulate_grad_batches = accumulate_grad_batches
-        if opt.scale_lr:
-            model.learning_rate = accumulate_grad_batches * ngpu * bs * base_lr
-            print(
-                "Setting learning rate to {:.2e} = {} (accumulate_grad_batches) * {} (num_gpus) * {} (batchsize) * {:.2e} (base_lr)"
-                .format(model.learning_rate, accumulate_grad_batches, ngpu, bs,
-                        base_lr))
-        else:
-            model.learning_rate = base_lr
-            print("++++ NOT USING LR SCALING ++++")
-            print(f"Setting learning rate to {model.learning_rate:.2e}")
-
-        # allow checkpointing via USR1
-        def melk(*args, **kwargs):
-            # run all checkpoint hooks
-            if trainer.global_rank == 0:
-                print("Summoning checkpoint.")
-                ckpt_path = os.path.join(ckptdir, "last.ckpt")
-                trainer.save_checkpoint(ckpt_path)
-
-        def divein(*args, **kwargs):
-            if trainer.global_rank == 0:
-                import pudb
-                pudb.set_trace()
-
-        import signal
-
-        signal.signal(signal.SIGUSR1, melk)
-        signal.signal(signal.SIGUSR2, divein)
-
-        # run
-        if opt.train:
-            try:
-                trainer.fit(model, data)
-            except Exception:
-                # melk()
-                raise
-        if not opt.no_test and not trainer.interrupted:
-            trainer.test(model, data)
-    except Exception:
-        if opt.debug and trainer.global_rank == 0:
-            try:
-                import pudb as debugger
-            except ImportError:
-                import pdb as debugger
-            debugger.post_mortem()
-        raise
-    finally:
-        # move newly created debug project to debug_runs
-        if opt.debug and not opt.resume and trainer.global_rank == 0:
-            dst, name = os.path.split(logdir)
-            dst = os.path.join(dst, "debug_runs", name)
-            os.makedirs(os.path.split(dst)[0], exist_ok=True)
-            os.rename(logdir, dst)
-        if trainer.global_rank == 0:
-            print(trainer.profiler.summary())
+            for j, item in enumerate(range(len(x))):
+                img_in = ToPILImage()(input[j])
+                img_in.save(join(logdir, f"{i*batch_size+j:04d}_input.png"))
+                img_out = ToPILImage()(x[j])
+                img_out.save(join(logdir, f"{i*batch_size+j:04d}_output.png"))
