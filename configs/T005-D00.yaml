@@ -90,11 +90,9 @@ data:
         path: DATASET/openimage
         split: train
         resize_res: 512
-        sigma: 0.5
     validation:
       target: edit_dataset.GrayscaleDataset
       params:
         path: DATASET/openimage
         split: val
         resize_res: 512
-        sigma: 0.5
